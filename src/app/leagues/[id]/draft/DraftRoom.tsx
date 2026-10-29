@@ -31,9 +31,23 @@ export function DraftRoom({ leagueId }: { leagueId: number }) {
     setState(s);
   }, []);
 
+  const inFlight = useRef(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  /** Uma consulta por vez; falhas aparecem na tela e a próxima consulta tenta de novo. */
   const refresh = useCallback(async () => {
-    const res = await fetch(`/api/leagues/${leagueId}/draft?${query}`, { cache: "no-store" });
-    if (res.ok) apply((await res.json()) as DraftState);
+    if (inFlight.current) return;
+    inFlight.current = true;
+    try {
+      const res = await fetch(`/api/leagues/${leagueId}/draft?${query}`, { cache: "no-store" });
+      if (!res.ok) throw new Error(res.status === 401 ? "Sessão expirada: entre novamente" : `Erro ${res.status} no servidor`);
+      apply((await res.json()) as DraftState);
+      setLoadError(null);
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : "Falha de conexão");
+    } finally {
+      inFlight.current = false;
+    }
   }, [leagueId, query, apply]);
 
   useEffect(() => {
@@ -58,7 +72,13 @@ export function DraftRoom({ leagueId }: { leagueId: number }) {
     else apply(body);
   }
 
-  if (!state) return <p className="card text-sm text-slate-500">Carregando sala de draft…</p>;
+  if (!state) {
+    return (
+      <p className="card text-sm text-slate-500">
+        {loadError ? `Não foi possível carregar o draft (${loadError}). Tentando de novo…` : "Carregando sala de draft…"}
+      </p>
+    );
+  }
   if (state.status === "SETUP") return <p className="card text-sm">O comissário ainda não iniciou o draft.</p>;
 
   const teamName = (id: number | null) => state.teams.find((t) => t.id === id)?.name ?? "—";
@@ -90,7 +110,9 @@ export function DraftRoom({ leagueId }: { leagueId: number }) {
       ) : (
         <p className="card bg-emerald-50 font-semibold text-emerald-900">Draft concluído! Confira seu time em “Meu time”.</p>
       )}
-      {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-200">{error}</p>}
+      {(error ?? loadError) && (
+        <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-200">{error ?? `Conexão instável: ${loadError}`}</p>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
         <section className="card">
