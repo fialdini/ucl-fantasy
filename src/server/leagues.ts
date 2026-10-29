@@ -17,10 +17,9 @@ import {
 import { autoPick, cannotPick, shuffle, snakeOrder, type DraftCandidate } from "@/domain/draft";
 import { currentRound, isRoundLocked, lineupLockState } from "@/domain/lock";
 import { cannotReplace, initialSlots, validateLineup } from "@/domain/roster";
+import { GameError } from "./errors";
 import { createRegularSchedule } from "./season";
 
-/** Erro de regra do jogo, com mensagem para o usuário. */
-export class GameError extends Error {}
 
 // ---------- Liga ----------
 
