@@ -34,7 +34,8 @@ export const game = {
     clubCap: (roundOrder: number) => (roundOrder <= 8 ? 3 : 4),
   },
 
-  draft: { pickSeconds: 60 },
+  /** 60s por pick. DRAFT_PICK_SECONDS só para testes locais. */
+  draft: { pickSeconds: Number(process.env.DRAFT_PICK_SECONDS) || 60 },
 
   /**
    * Temporada regular: da rodada de início da liga até a volta do playoff (rodada 10).
