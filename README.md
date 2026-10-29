@@ -17,7 +17,7 @@ npm run dev                     # http://localhost:3000
 
 Entre com `demo1@ucl.dev` / `demo12345` (comissário da Liga Demo) e clique em **Iniciar draft**. Os outros 5 times não escolhem, então ganham auto-pick a cada 60 s. Para testar mais rápido, use `DRAFT_PICK_SECONDS=2 npm run dev`.
 
-No painel **Comissário**, o botão **Mock: avançar 1 semana** adianta a temporada simulada. Com isso, a rodada seguinte é jogada, pontuada e fechada, e a janela de waiver abre.
+No painel **Comissário**, o botão **Simulação: jogar …** adianta a temporada simulada. Com isso, a rodada seguinte é jogada, pontuada e fechada, e a janela de waiver abre.
 
 > O PGlite aceita **um processo por vez**. Pare o `npm run dev` antes de rodar `db:seed` ou `sync`. Para recomeçar do zero, apague `.data/`.
 
@@ -35,6 +35,25 @@ Os testes unitários cobrem pontuação, ordem do snake, resolução de waivers,
 1. Crie uma conta em https://dashboard.api-football.com e copie a chave.
 2. Em `.env.local`: `DATA_PROVIDER=api-football`, `API_FOOTBALL_KEY=...` e `API_FOOTBALL_SEASON=2026`.
 3. Valide o plano: `npm run check:api`. O script verifica se a temporada atual está liberada e se as partidas trazem estatística por jogador e defesas. Há relatos de que o plano grátis não dá acesso à temporada corrente; nesse caso, é preciso um plano pago.
+
+### Replay de temporada encerrada (plano grátis)
+
+O plano grátis só acessa as temporadas de 2022 a 2024 e não aceita o parâmetro `ids`. Para testar com jogadores e estatísticas reais, use a Champions 2024/25, que já tem o formato de 36 clubes:
+
+```
+DATA_PROVIDER=api-football
+API_FOOTBALL_SEASON=2024
+API_FOOTBALL_REPLAY=true
+API_FOOTBALL_BATCH_IDS=false
+```
+
+Depois rode `npm run db:seed` (cerca de 20 requisições) e `npm run dev`.
+
+- **Datas:** o replay desloca as datas em dias inteiros, deixando a rodada 1 encerrada e a rodada 2 nos próximos dias. Partidas futuras aparecem sem placar.
+- **Elencos:** saem das súmulas já reveladas. Jogadores novos entram quando aparecem numa súmula.
+- **Botão "Simulação: jogar …"** no painel do comissário: adianta o relógio até a rodada vigente terminar, e a sincronização pontua e fecha. Custa 1 requisição por partida nova (18 na fase de liga, cerca de 2 min por causa do limite de 10 por minuto).
+- **Cache:** dados históricos ficam em cache para sempre, então reprocessar não gasta requisições.
+- **Banco separado:** os modos de API usam `.data/pglite-api`, separado do mock (`.data/pglite`).
 
 **Consumo por rodada da fase de liga (18 jogos):**
 

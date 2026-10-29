@@ -162,7 +162,19 @@ export async function syncSquads(ctx: JobContext): Promise<JobResult> {
 
 // ---------- Estatísticas e pontos ----------
 
+/** Jogador que aparece na súmula sem estar no cadastro (inscrito tarde) entra com a posição da súmula. */
+async function registerNewPlayers(db: DbOrTx, detail: MatchDetail) {
+  const candidates = detail.players.filter((p) => p.position);
+  if (candidates.length === 0) return;
+  const clubIds = new Set((await db.select({ id: clubs.id }).from(clubs)).map((c) => c.id));
+  const rows = candidates
+    .filter((p) => clubIds.has(p.clubId))
+    .map((p) => ({ id: p.playerId, name: p.name, position: p.position!, clubId: p.clubId }));
+  if (rows.length) await db.insert(players).values(rows).onConflictDoNothing({ target: players.id });
+}
+
 async function storeMatchStats(db: DbOrTx, detail: MatchDetail, final: boolean): Promise<{ unknownPlayers: number }> {
+  await registerNewPlayers(db, detail);
   const ids = detail.players.map((p) => p.playerId);
   const known = ids.length
     ? await db.select({ id: players.id, position: players.position }).from(players).where(inArray(players.id, ids))

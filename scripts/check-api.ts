@@ -34,7 +34,7 @@ console.log(`✅ ${mapped.length} partidas mapeadas. Por rodada:`, Object.fromEn
 
 const finished = mapped.find((f) => f.status === "FINISHED");
 if (finished) {
-  const detail = await get(`/fixtures?ids=${finished.id}`);
+  const detail = await get(`/fixtures?id=${finished.id}`);
   const [m] = mapMatchDetails(detail.body.response);
   const withMinutes = m?.players.filter((p) => p.minutes > 0).length ?? 0;
   console.log(`✅ Partida ${finished.id}: ${m?.players.length ?? 0} jogadores, ${withMinutes} com minutos, ${m?.goals.length ?? 0} gols na linha do tempo.`);

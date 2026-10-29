@@ -10,7 +10,8 @@ export type DbOrTx = Db | Tx;
 const migrationsFolder = path.join(process.cwd(), "drizzle");
 
 /**
- * Sem DATABASE_URL: Postgres embutido (PGlite) em ./.data/pglite — zero instalação.
+ * Sem DATABASE_URL: Postgres embutido (PGlite) — zero instalação. Mock e API usam pastas separadas
+ * (./.data/pglite e ./.data/pglite-api) para dados fictícios e reais nunca se misturarem.
  * Com DATABASE_URL: Postgres real (produção).
  * `memory: true` cria um banco efêmero (testes).
  */
@@ -30,7 +31,8 @@ export async function createDb(options: { memory?: boolean; url?: string } = {})
   let client;
   if (options.memory) client = new PGlite();
   else {
-    const dataDir = path.join(process.cwd(), ".data", "pglite");
+    const folder = process.env.DATA_PROVIDER === "api-football" ? "pglite-api" : "pglite";
+    const dataDir = process.env.PGLITE_DATA_DIR ?? path.join(process.cwd(), ".data", folder);
     mkdirSync(dataDir, { recursive: true });
     client = new PGlite(dataDir);
   }

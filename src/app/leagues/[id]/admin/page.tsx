@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
-import { advanceMockWeekAction, recalcPointsAction, reprocessRoundAction, syncNowAction } from "@/app/actions";
-import { providerName } from "@/providers";
+import { advanceRoundAction, recalcPointsAction, reprocessRoundAction, syncNowAction } from "@/app/actions";
+import { isReplay, isSimulated, providerName } from "@/providers";
 import { clubNames, pendingStatsMatches, recentSyncLogs, roundsState } from "@/web/queries";
 import { requireMember } from "@/web/session";
 import { Badge, Flash, formatDate, type SearchParams } from "@/web/ui";
@@ -17,7 +17,7 @@ export default async function AdminPage({ params, searchParams }: { params: Prom
     roundsState(db, new Date()),
     clubNames(db),
   ]);
-  const provider = providerName();
+  const provider = isReplay() ? `api-football · replay ${process.env.API_FOOTBALL_SEASON}/${Number(process.env.API_FOOTBALL_SEASON) + 1 - 2000}` : providerName();
   const hidden = <input type="hidden" name="leagueId" value={league.id} />;
 
   return (
@@ -26,7 +26,7 @@ export default async function AdminPage({ params, searchParams }: { params: Prom
       <div className="card space-y-3">
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="font-semibold">Dados</h2>
-          <Badge tone={provider === "mock" ? "amber" : "green"}>Fonte: {provider}</Badge>
+          <Badge tone={isSimulated() ? "amber" : "green"}>Fonte: {provider}</Badge>
         </div>
         <div className="flex flex-wrap gap-2">
           <form action={syncNowAction}>
@@ -50,16 +50,17 @@ export default async function AdminPage({ params, searchParams }: { params: Prom
               Recalcular pontos (sem API)
             </button>
           </form>
-          {provider === "mock" && (
-            <form action={advanceMockWeekAction}>
+          {isSimulated() && (
+            <form action={advanceRoundAction}>
               {hidden}
-              <button className="btn-ghost">Mock: avançar 1 semana</button>
+              <button className="btn-ghost">Simulação: jogar {current?.name ?? "a próxima rodada"}</button>
             </form>
           )}
         </div>
         <p className="text-xs text-slate-500">
           O job agendado (/api/cron) roda isso automaticamente. Reprocessar busca de novo na fonte e recalcula, sem fechar a
           rodada.
+          {isReplay() && " No replay, cada partida nova custa 1 requisição (plano grátis: 100/dia, 10/min) — jogar uma rodada leva ~2 min."}
         </p>
       </div>
 

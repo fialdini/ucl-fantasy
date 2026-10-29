@@ -12,6 +12,10 @@ export interface ApiFootballOptions {
   season: number;
   leagueId: number;
   minIntervalMs: number;
+  /** false no plano grátis, que não aceita `ids`: busca uma partida por requisição. */
+  batchIds?: boolean;
+  /** Temporada encerrada: respostas nunca expiram no cache. */
+  immutable?: boolean;
   cache: ResponseCache;
   fetch?: typeof fetch;
 }
@@ -59,7 +63,7 @@ export class ApiFootballProvider implements FootballDataProvider {
   ): Promise<unknown> {
     if (!fresh) {
       const hit = await this.options.cache.get(key);
-      if (hit && Date.now() - hit.fetchedAt.getTime() < maxAgeMs) return hit.response;
+      if (hit && (this.options.immutable || Date.now() - hit.fetchedAt.getTime() < maxAgeMs)) return hit.response;
     }
     const response = await this.request(path, params);
     await this.options.cache.set(key, path, response);
@@ -92,9 +96,10 @@ export class ApiFootballProvider implements FootballDataProvider {
       if (hit) details.push(...mapMatchDetails([hit.response]));
       else missing.push(id);
     }
-    for (let i = 0; i < missing.length; i += IDS_PER_REQUEST) {
-      const batch = missing.slice(i, i + IDS_PER_REQUEST);
-      const response = await this.request("/fixtures", { ids: batch.join("-") });
+    const perRequest = this.options.batchIds === false ? 1 : IDS_PER_REQUEST;
+    for (let i = 0; i < missing.length; i += perRequest) {
+      const batch = missing.slice(i, i + perRequest);
+      const response = await this.request("/fixtures", perRequest === 1 ? { id: batch[0]! } : { ids: batch.join("-") });
       const items = Array.isArray(response) ? response : [];
       for (const item of items) {
         const [detail] = mapMatchDetails([item]);

@@ -3,7 +3,8 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { getDb } from "@/db/client";
-import { getProvider, MOCK_ANCHOR_KEY, providerName } from "@/providers";
+import { game } from "@config/game";
+import { advanceSimulationClock, getProvider, isSimulated } from "@/providers";
 import { createSession, deleteSession, login, register } from "@/server/auth";
 import { GameError } from "@/server/errors";
 import { recalcPoints, reprocessRound, runScheduledJobs, withSyncLog } from "@/server/jobs";
@@ -16,7 +17,7 @@ import {
   setLineup,
   startDraft,
 } from "@/server/leagues";
-import { getSetting, setSetting } from "@/server/settings";
+import { roundsState } from "@/web/queries";
 import { requireMember, requireUser, SESSION_COOKIE } from "@/web/session";
 
 const str = (form: FormData, key: string) => String(form.get(key) ?? "");
@@ -181,15 +182,21 @@ export async function recalcPointsAction(form: FormData) {
   });
 }
 
-/** Só no modo mock: adianta o relógio da temporada simulada em 7 dias e sincroniza. */
-export async function advanceMockWeekAction(form: FormData) {
+/**
+ * Mock/replay: adianta o relógio da temporada até a rodada vigente ter terminado e passado o prazo
+ * de correção — a sincronização seguinte pontua e fecha a rodada.
+ */
+export async function advanceRoundAction(form: FormData) {
   const { db, path } = await requireCommissioner(form);
   await run(path, async () => {
-    if (providerName() !== "mock") throw new GameError("Disponível só com DATA_PROVIDER=mock");
-    await getProvider(db);
-    const anchor = new Date((await getSetting<string>(db, MOCK_ANCHOR_KEY))!);
-    await setSetting(db, MOCK_ANCHOR_KEY, new Date(anchor.getTime() - 7 * 86_400_000).toISOString());
-    await runScheduledJobs({ db, provider: await getProvider(db), now: new Date() }, { forceCalendar: true });
-    return "Temporada simulada avançou 1 semana";
+    if (!isSimulated()) throw new GameError("Disponível só no mock ou no replay de temporada encerrada");
+    const now = new Date();
+    const { current } = await roundsState(db, now);
+    if (!current?.lastKickoff) throw new GameError("Sem rodada para jogar — sincronize o calendário");
+    const closesAt = current.lastKickoff.getTime() + (game.sync.matchDurationMinutes + game.sync.closeDelayHours * 60 + 5) * 60_000;
+    // Em dias inteiros, para os jogos manterem o horário original.
+    if (closesAt > now.getTime()) await advanceSimulationClock(db, Math.ceil((closesAt - now.getTime()) / 86_400_000) * 86_400_000);
+    const results = await runScheduledJobs({ db, provider: await getProvider(db), now }, { forceCalendar: true });
+    return results.close?.message ?? `${current.name} jogada`;
   });
 }

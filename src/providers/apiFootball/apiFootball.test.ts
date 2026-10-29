@@ -29,7 +29,7 @@ const detail = {
       players: [
         {
           player: { id: 101, name: "Atacante" },
-          statistics: [{ games: { minutes: 90, substitute: false }, goals: { total: 1, assists: null, saves: null }, cards: { yellow: 0, red: 0 }, penalty: { saved: null, missed: 0 } }],
+          statistics: [{ games: { minutes: 90, substitute: false, position: "F" }, goals: { total: 1, assists: null, saves: null }, cards: { yellow: 0, red: 0 }, penalty: { saved: null, missed: 0 } }],
         },
         {
           player: { id: 103, name: "Zagueiro" },
@@ -110,6 +110,8 @@ describe("mapper da API-Football", () => {
     ]);
     expect(m?.players.find((p) => p.playerId === 105)?.minutes).toBe(0);
     expect(m?.players.find((p) => p.playerId === 201)?.penaltiesMissed).toBe(1);
+    expect(m?.players.find((p) => p.playerId === 101)?.position).toBe("FWD");
+    expect(m?.players.find((p) => p.playerId === 103)?.position).toBeNull();
 
     const stats = deriveRawStats(m!);
     expect(stats.get(103)?.stats).toMatchObject({ ownGoals: 1, assists: 1, goalsConceded: 1 });
@@ -142,6 +144,26 @@ describe("ApiFootballProvider", () => {
 
     const url = (fetchMock.mock.calls[0] as unknown as [URL])[0];
     expect(url.searchParams.get("ids")).toBe("900");
+  });
+
+  it("no plano grátis (sem `ids`) busca uma partida por requisição", async () => {
+    const fetchMock = vi.fn(async (url: URL) => ok([{ ...detail, fixture: { ...detail.fixture, id: Number(url.searchParams.get("id")) } }]));
+    const provider = new ApiFootballProvider({ apiKey: "k", season: 2024, leagueId: 2, minIntervalMs: 0, batchIds: false, cache: memoryCache(), fetch: fetchMock as unknown as typeof fetch });
+    const details = await provider.getMatchDetails([900, 901]);
+    expect(details.map((d) => d.matchId)).toEqual([900, 901]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect((fetchMock.mock.calls[0] as unknown as [URL])[0].searchParams.has("ids")).toBe(false);
+  });
+
+  it("temporada encerrada: cache nunca expira", async () => {
+    const fetchMock = vi.fn(async () => ok([]));
+    const store = new Map<string, { response: unknown; fetchedAt: Date }>([
+      ["apif:fixtures:2:2024", { response: [], fetchedAt: new Date("2020-01-01") }],
+    ]);
+    const cache: ResponseCache = { get: async (k) => store.get(k) ?? null, set: async () => {} };
+    const provider = new ApiFootballProvider({ apiKey: "k", season: 2024, leagueId: 2, minIntervalMs: 0, immutable: true, cache, fetch: fetchMock as typeof fetch });
+    await provider.getFixtures();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("falha explicitamente quando a API devolve erro (ex.: temporada fora do plano)", async () => {

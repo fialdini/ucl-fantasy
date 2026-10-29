@@ -52,7 +52,7 @@ export const fixtureDetailSchema = z.array(
               player: z.object({ id: z.number(), name: z.string() }),
               statistics: z.array(
                 z.object({
-                  games: z.object({ minutes: num, substitute: z.boolean().nullable().optional() }),
+                  games: z.object({ minutes: num, substitute: z.boolean().nullable().optional(), position: z.string().nullable().optional() }),
                   goals: z.object({ total: num, assists: num, saves: num }).partial().optional(),
                   cards: z.object({ yellow: num, red: num }).partial().optional(),
                   penalty: z.object({ saved: num, missed: num }).partial().optional(),
@@ -82,6 +82,7 @@ export function mapClubs(raw: unknown): ProviderClub[] {
 }
 
 const POSITIONS: Record<string, Position> = { Goalkeeper: "GK", Defender: "DEF", Midfielder: "MID", Attacker: "FWD" };
+const MATCH_POSITIONS: Record<string, Position> = { G: "GK", D: "DEF", M: "MID", F: "FWD" };
 
 export function mapSquad(raw: unknown, clubId: number): ProviderPlayer[] {
   return squadsSchema.parse(raw).flatMap((entry) =>
@@ -170,6 +171,7 @@ export function mapMatchDetails(raw: unknown): MatchDetail[] {
           playerId: player.id,
           clubId: team.team.id,
           name: player.name,
+          position: s?.games.position ? (MATCH_POSITIONS[s.games.position] ?? null) : null,
           minutes: n0(s?.games.minutes),
           substitute: s?.games.substitute ?? false,
           goals: n0(s?.goals?.total),

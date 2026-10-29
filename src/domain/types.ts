@@ -33,6 +33,8 @@ export interface MatchDetail {
     playerId: number;
     clubId: number;
     name: string;
+    /** Posição na súmula, quando a fonte informa (usada para cadastrar jogadores novos). */
+    position?: Position | null;
     minutes: number;
     /** true = entrou vindo do banco. */
     substitute: boolean;
