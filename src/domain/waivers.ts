@@ -38,8 +38,17 @@ export interface WaiverOutcome {
   reason: string | null;
 }
 
+export interface WaiverMove {
+  claimId: number;
+  teamId: number;
+  addPlayerId: number;
+  dropPlayerId: number;
+}
+
 export function resolveWaivers(input: WaiverInput): {
   outcomes: WaiverOutcome[];
+  /** Trocas atendidas, na ordem em que devem ser aplicadas. */
+  moves: WaiverMove[];
   rosters: Map<number, number[]>;
 } {
   const rosters = new Map([...input.rosters].map(([teamId, ids]) => [teamId, [...ids]]));
@@ -50,6 +59,7 @@ export function resolveWaivers(input: WaiverInput): {
   }
   const outcomes = new Map<number, WaiverOutcome>();
   const lastReason = new Map<number, string>();
+  const moves: WaiverMove[] = [];
 
   const invalidReason = (claim: WaiverClaimInput): string | null => {
     const add = input.players.get(claim.addPlayerId);
@@ -80,6 +90,7 @@ export function resolveWaivers(input: WaiverInput): {
       owned.delete(claim.dropPlayerId);
       owned.add(claim.addPlayerId);
       outcomes.set(claim.id, { claimId: claim.id, status: "SUCCEEDED", reason: null });
+      moves.push({ claimId: claim.id, teamId: claim.teamId, addPlayerId: claim.addPlayerId, dropPlayerId: claim.dropPlayerId });
       return true;
     }
     return false;
@@ -115,5 +126,5 @@ export function resolveWaivers(input: WaiverInput): {
       outcomes.set(claim.id, { claimId: claim.id, status: "FAILED", reason: lastReason.get(claim.id) ?? "Não atendido" });
     }
   }
-  return { outcomes: input.claims.map((c) => outcomes.get(c.id)!), rosters };
+  return { outcomes: input.claims.map((c) => outcomes.get(c.id)!), moves, rosters };
 }

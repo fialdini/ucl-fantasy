@@ -64,6 +64,7 @@ describe("resolveWaivers", () => {
       }),
     );
     expect(status(r)).toEqual(["1:SUCCEEDED", "2:FAILED", "3:SUCCEEDED"]);
+    expect(r.moves.map((m) => m.claimId)).toEqual([1, 3]);
   });
 
   it("usa a preferência do time e segue para o próximo pedido se o primeiro falhar", () => {
@@ -122,5 +123,6 @@ describe("resolveWaivers", () => {
       }),
     );
     expect(status(r)).toEqual(["1:SUCCEEDED", "2:FAILED", "3:SUCCEEDED", "4:SUCCEEDED"]);
+    expect(r.moves.map((m) => m.claimId)).toEqual([1, 3, 4]);
   });
 });
