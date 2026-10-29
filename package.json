@@ -14,9 +14,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx scripts/migrate.ts",
-    "db:seed": "tsx scripts/seed.ts",
-    "sync": "tsx scripts/sync.ts"
+    "db:migrate": "tsx --env-file-if-exists=.env.local scripts/migrate.ts",
+    "db:seed": "tsx --env-file-if-exists=.env.local scripts/seed.ts",
+    "sync": "tsx --env-file-if-exists=.env.local scripts/sync.ts",
+    "check:api": "tsx --env-file-if-exists=.env.local scripts/check-api.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.5.13",
