@@ -303,7 +303,7 @@ export async function updateMatchupScores(db: DbOrTx, roundOrder: number) {
     const away = await teamSpanScore(db, m.awayTeamId, m.fromRound, m.toRound);
     await db
       .update(matchups)
-      .set({ homePoints: home.points, awayPoints: away.points, status: "PARTIAL" })
+      .set({ homePoints: home.points, awayPoints: away.points, status: home.started || away.started ? "PARTIAL" : "SCHEDULED" })
       .where(eq(matchups.id, m.id));
   }
   return open.length;
@@ -466,7 +466,7 @@ const HOUR = 3_600_000;
  * calendário → elencos → estatísticas pós-jogo (parciais) → escalações travadas → placares →
  * fechamento da rodada (reprocessa, finaliza, elimina, abre waivers) → processamento de waivers.
  */
-export async function runScheduledJobs(ctx: JobContext) {
+export async function runScheduledJobs(ctx: JobContext, options: { forceCalendar?: boolean } = {}) {
   const { db, now } = ctx;
   const results: Record<string, { ok: boolean; message: string }> = {};
   const allRounds = await db.select().from(rounds);
@@ -477,6 +477,7 @@ export async function runScheduledJobs(ctx: JobContext) {
     .where(and(lte(matches.kickoff, now), inArray(matches.status, ["SCHEDULED", "LIVE"])))
     .limit(1);
   if (
+    options.forceCalendar ||
     allRounds.length === 0 ||
     awaitingResult.length > 0 ||
     !lastCalendar ||
@@ -496,7 +497,8 @@ export async function runScheduledJobs(ctx: JobContext) {
     await updateMatchupScores(db, round.order);
     results.close = await withSyncLog(ctx, `close-round-${round.order}`, async () => {
       const r = await closeRound(ctx, round.order);
-      return { ...r, status: r.closed ? "SUCCESS" : r.status };
+      // Rodada ainda não pronta para fechar fica registrada como PARTIAL, com o motivo.
+      return { ...r, status: r.closed ? "SUCCESS" : "PARTIAL" };
     });
   }
   results.waivers = await withSyncLog(ctx, "waivers", () => processWaivers(ctx));

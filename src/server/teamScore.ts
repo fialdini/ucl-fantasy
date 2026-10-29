@@ -96,14 +96,16 @@ export async function teamRoundScore(db: DbOrTx, teamId: number, roundOrder: num
 export async function teamSpanScore(db: DbOrTx, teamId: number, fromRound: number, toRound: number) {
   let points = 0;
   let awaitingData = false;
+  let started = false;
   for (let order = fromRound; order <= toRound; order++) {
     const [round] = await db.select().from(rounds).where(eq(rounds.order, order));
     if (!round) continue;
     const s = await teamRoundScore(db, teamId, order);
     // Rodada que ainda não travou não conta (escalação pode mudar).
     if (!s.locked) continue;
+    started = true;
     points += s.points;
     awaitingData ||= s.awaitingData;
   }
-  return { points, awaitingData };
+  return { points, awaitingData, started };
 }
