@@ -18,9 +18,36 @@ export interface ApiFootballOptions {
   immutable?: boolean;
   cache: ResponseCache;
   fetch?: typeof fetch;
+  /** Espera antes de tentar de novo após "limite por minuto" (429). */
+  retryDelayMs?: number;
 }
 
 export class ApiFootballError extends Error {}
+
+const MAX_RETRIES = 3;
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Ritmo de requisições compartilhado por todo o processo: o limite por minuto é da conta,
+ * não de cada sincronização. Sobrevive ao hot reload do Next.
+ */
+const throttle = ((globalThis as { __apifThrottle?: { chain: Promise<void>; lastAt: number } }).__apifThrottle ??= {
+  chain: Promise.resolve(),
+  lastAt: 0,
+});
+
+function nextSlot(minIntervalMs: number): Promise<void> {
+  const slot = throttle.chain.then(async () => {
+    const wait = throttle.lastAt + minIntervalMs - Date.now();
+    if (wait > 0) await sleep(wait);
+    throttle.lastAt = Date.now();
+  });
+  throttle.chain = slot.catch(() => {});
+  return slot;
+}
+
+const isRateLimit = (errors: unknown) =>
+  typeof errors === "object" && errors !== null && !Array.isArray(errors) && "rateLimit" in errors;
 
 /**
  * Provider real. Cada resposta é gravada no cache do banco; leituras dentro do prazo de validade
@@ -30,7 +57,6 @@ export class ApiFootballError extends Error {}
 export class ApiFootballProvider implements FootballDataProvider {
   readonly name = "api-football";
   private requests = 0;
-  private lastRequestAt = 0;
 
   constructor(private readonly options: ApiFootballOptions) {}
 
@@ -39,19 +65,24 @@ export class ApiFootballProvider implements FootballDataProvider {
   }
 
   private async request(path: string, params: Record<string, string | number>): Promise<unknown> {
-    const wait = this.lastRequestAt + this.options.minIntervalMs - Date.now();
-    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
-    this.lastRequestAt = Date.now();
-    this.requests++;
     const url = new URL(path, BASE_URL);
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
-    const res = await (this.options.fetch ?? fetch)(url, { headers: { "x-apisports-key": this.options.apiKey } });
-    if (!res.ok) throw new ApiFootballError(`API-Football ${path}: HTTP ${res.status}`);
-    const body = (await res.json()) as { errors?: unknown; response?: unknown };
-    const errors = body.errors;
-    const hasErrors = Array.isArray(errors) ? errors.length > 0 : errors && Object.keys(errors).length > 0;
-    if (hasErrors) throw new ApiFootballError(`API-Football ${path}: ${JSON.stringify(errors)}`);
-    return body.response ?? [];
+    for (let attempt = 0; ; attempt++) {
+      await nextSlot(this.options.minIntervalMs);
+      this.requests++;
+      const res = await (this.options.fetch ?? fetch)(url, { headers: { "x-apisports-key": this.options.apiKey } });
+      const body = res.ok ? ((await res.json()) as { errors?: unknown; response?: unknown }) : null;
+      // Limite por minuto: espera e tenta de novo (o limite diário não se resolve esperando).
+      if ((res.status === 429 || isRateLimit(body?.errors)) && attempt < MAX_RETRIES) {
+        await sleep(this.options.retryDelayMs ?? 61_000);
+        continue;
+      }
+      if (!res.ok) throw new ApiFootballError(`API-Football ${path}: HTTP ${res.status}`);
+      const errors = body?.errors;
+      const hasErrors = Array.isArray(errors) ? errors.length > 0 : errors && Object.keys(errors).length > 0;
+      if (hasErrors) throw new ApiFootballError(`API-Football ${path}: ${JSON.stringify(errors)}`);
+      return body?.response ?? [];
+    }
   }
 
   private async cached(

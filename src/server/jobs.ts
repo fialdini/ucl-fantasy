@@ -478,7 +478,16 @@ const HOUR = 3_600_000;
  * calendário → elencos → estatísticas pós-jogo (parciais) → escalações travadas → placares →
  * fechamento da rodada (reprocessa, finaliza, elimina, abre waivers) → processamento de waivers.
  */
-export async function runScheduledJobs(ctx: JobContext, options: { forceCalendar?: boolean } = {}) {
+const jobQueue = ((globalThis as { __uclJobQueue?: { chain: Promise<unknown> } }).__uclJobQueue ??= { chain: Promise.resolve() });
+
+/** Uma sincronização por vez no processo: um segundo clique espera a primeira terminar. */
+export function runScheduledJobs(ctx: JobContext, options: { forceCalendar?: boolean } = {}) {
+  const run = jobQueue.chain.then(() => runScheduledJobsNow(ctx, options));
+  jobQueue.chain = run.catch(() => {});
+  return run;
+}
+
+async function runScheduledJobsNow(ctx: JobContext, options: { forceCalendar?: boolean }) {
   const { db, now } = ctx;
   const results: Record<string, { ok: boolean; message: string }> = {};
   const allRounds = await db.select().from(rounds);

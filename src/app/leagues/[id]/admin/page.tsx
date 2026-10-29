@@ -3,6 +3,7 @@ import { advanceRoundAction, recalcPointsAction, reprocessRoundAction, syncNowAc
 import { isReplay, isSimulated, providerName } from "@/providers";
 import { clubNames, pendingStatsMatches, recentSyncLogs, roundsState } from "@/web/queries";
 import { requireMember } from "@/web/session";
+import { SubmitButton } from "@/web/SubmitButton";
 import { Badge, Flash, formatDate, type SearchParams } from "@/web/ui";
 
 const TONE = { SUCCESS: "green", PARTIAL: "amber", ERROR: "red", RUNNING: "blue" } as const;
@@ -31,7 +32,7 @@ export default async function AdminPage({ params, searchParams }: { params: Prom
         <div className="flex flex-wrap gap-2">
           <form action={syncNowAction}>
             {hidden}
-            <button className="btn">Sincronizar agora</button>
+            <SubmitButton pendingText="Sincronizando… (pode levar alguns minutos)">Sincronizar agora</SubmitButton>
           </form>
           <form action={reprocessRoundAction} className="flex gap-2">
             {hidden}
@@ -42,18 +43,20 @@ export default async function AdminPage({ params, searchParams }: { params: Prom
                 </option>
               ))}
             </select>
-            <button className="btn">Reprocessar rodada</button>
+            <SubmitButton pendingText="Reprocessando…">Reprocessar rodada</SubmitButton>
           </form>
           <form action={recalcPointsAction}>
             {hidden}
-            <button className="btn-ghost" title="Recalcula com a tabela de pontuação atual, sem chamar a API">
+            <SubmitButton className="btn-ghost" pendingText="Recalculando…">
               Recalcular pontos (sem API)
-            </button>
+            </SubmitButton>
           </form>
           {isSimulated() && (
             <form action={advanceRoundAction}>
               {hidden}
-              <button className="btn-ghost">Simulação: jogar {current?.name ?? "a próxima rodada"}</button>
+              <SubmitButton className="btn-ghost" pendingText="Jogando a rodada… (pode levar alguns minutos)">
+                Simulação: jogar {current?.name ?? "a próxima rodada"}
+              </SubmitButton>
             </form>
           )}
         </div>

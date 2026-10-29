@@ -155,6 +155,27 @@ describe("ApiFootballProvider", () => {
     expect((fetchMock.mock.calls[0] as unknown as [URL])[0].searchParams.has("ids")).toBe(false);
   });
 
+  it("espera e tenta de novo quando bate o limite por minuto (429)", async () => {
+    let calls = 0;
+    const fetchMock = vi.fn(async () => (++calls === 1 ? new Response("", { status: 429 }) : ok([detail])));
+    const provider = new ApiFootballProvider({ apiKey: "k", season: 2024, leagueId: 2, minIntervalMs: 0, batchIds: false, retryDelayMs: 0, cache: memoryCache(), fetch: fetchMock as unknown as typeof fetch });
+    expect(await provider.getMatchDetails([900])).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("ritmo é compartilhado entre instâncias (limite é da conta)", async () => {
+    const times: number[] = [];
+    const fetchMock = vi.fn(async () => {
+      times.push(Date.now());
+      return ok([]);
+    });
+    const make = () => new ApiFootballProvider({ apiKey: "k", season: 2024, leagueId: 2, minIntervalMs: 120, cache: memoryCache(), fetch: fetchMock as typeof fetch });
+    await Promise.all([make().getFixtures(), make().getClubs(), make().getLeagueStageRanks()]);
+    times.sort((a, b) => a - b);
+    expect(times[1]! - times[0]!).toBeGreaterThanOrEqual(110);
+    expect(times[2]! - times[1]!).toBeGreaterThanOrEqual(110);
+  });
+
   it("temporada encerrada: cache nunca expira", async () => {
     const fetchMock = vi.fn(async () => ok([]));
     const store = new Map<string, { response: unknown; fetchedAt: Date }>([
