@@ -6,6 +6,12 @@ import type { ProviderClub, ProviderFixture, ProviderPlayer } from "../types";
 
 const num = z.number().nullable().optional();
 const n0 = (v: number | null | undefined) => v ?? 0;
+// Alguns campos chegam como texto (ex.: passes.accuracy = "34" em /fixtures/players).
+const numOrText = z
+  .union([z.number(), z.string()])
+  .nullable()
+  .optional()
+  .transform((v) => (typeof v === "string" ? (Number.parseInt(v, 10) || 0) : v));
 
 export const teamsSchema = z.array(
   z.object({ team: z.object({ id: z.number(), name: z.string(), code: z.string().nullable().optional(), logo: z.string().nullable().optional() }) }),
@@ -53,9 +59,17 @@ export const fixtureDetailSchema = z.array(
               statistics: z.array(
                 z.object({
                   games: z.object({ minutes: num, substitute: z.boolean().nullable().optional(), position: z.string().nullable().optional() }),
+                  offsides: num,
                   goals: z.object({ total: num, assists: num, saves: num }).partial().optional(),
+                  shots: z.object({ total: num, on: num }).partial().optional(),
+                  // Em /fixtures/players, `accuracy` é a quantidade de passes certos (não %).
+                  passes: z.object({ total: num, accuracy: numOrText }).partial().optional(),
+                  tackles: z.object({ total: num, interceptions: num }).partial().optional(),
+                  dribbles: z.object({ attempts: num, success: num }).partial().optional(),
+                  fouls: z.object({ drawn: num, committed: num }).partial().optional(),
                   cards: z.object({ yellow: num, red: num }).partial().optional(),
-                  penalty: z.object({ saved: num, missed: num }).partial().optional(),
+                  // "commited" é a grafia da própria API.
+                  penalty: z.object({ won: num, commited: num, saved: num, missed: num }).partial().optional(),
                 }),
               ),
             }),
@@ -167,6 +181,10 @@ export function mapMatchDetails(raw: unknown): MatchDetail[] {
     const players: MatchDetail["players"] = f.players.flatMap((team) =>
       team.players.map(({ player, statistics }) => {
         const s = statistics[0];
+        // Sem a contagem de certos não dá para saber quantos erraram: nenhum dos dois pontua.
+        const accurate = s?.passes?.accuracy;
+        const passes = accurate == null ? 0 : n0(s?.passes?.total);
+        const passesCompleted = Math.min(n0(accurate), passes);
         return {
           playerId: player.id,
           clubId: team.team.id,
@@ -176,6 +194,22 @@ export function mapMatchDetails(raw: unknown): MatchDetail[] {
           substitute: s?.games.substitute ?? false,
           goals: n0(s?.goals?.total),
           assists: n0(s?.goals?.assists),
+          shotsOnTarget: n0(s?.shots?.on),
+          // A API não separa bloqueado de para fora: tudo que não foi no gol conta como para fora.
+          shotsOffTarget: Math.max(n0(s?.shots?.total) - n0(s?.shots?.on), 0),
+          // A API-Football não informa bola na trave.
+          shotsWoodwork: 0,
+          tackles: n0(s?.tackles?.total),
+          // A API-Football não tem bolas recuperadas: as interceptações são a parte que ela informa.
+          ballsRecovered: n0(s?.tackles?.interceptions),
+          dribbles: n0(s?.dribbles?.success),
+          passesCompleted,
+          passesMissed: Math.max(passes - passesCompleted, 0),
+          foulsCommitted: n0(s?.fouls?.committed),
+          foulsSuffered: n0(s?.fouls?.drawn),
+          offsides: n0(s?.offsides),
+          penaltiesWon: n0(s?.penalty?.won),
+          penaltiesConceded: n0(s?.penalty?.commited),
           yellowCards: n0(s?.cards?.yellow),
           redCards: n0(s?.cards?.red),
           saves: n0(s?.goals?.saves),

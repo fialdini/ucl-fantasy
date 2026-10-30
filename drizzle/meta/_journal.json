@@ -8,6 +8,55 @@
       "when": 1793242082472,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1793283115842,
+      "tag": "0001_scouts",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793286293302,
+      "tag": "0002_cartola",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793287526246,
+      "tag": "0003_balls_recovered",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793288029534,
+      "tag": "0004_trades",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1793289426180,
+      "tag": "0005_league_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793291261002,
+      "tag": "0006_player_details",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793305544849,
+      "tag": "0007_sub_positions_managers",
+      "breakpoints": true
     }
   ]
 }

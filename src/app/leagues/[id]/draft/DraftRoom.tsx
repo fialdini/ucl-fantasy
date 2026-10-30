@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DraftState } from "@/app/api/leagues/[id]/draft/route";
 import type { Position } from "@/domain/types";
+import { cannotAdd } from "@/domain/roster";
+import { PlayerAvatar } from "@/web/PlayerAvatar";
+import { Pos, SubPos, pts } from "@/web/ui";
 
 const LABEL: Record<Position, string> = { GK: "GOL", DEF: "DEF", MID: "MEI", FWD: "ATA" };
 const POLL_MS = 2000;
@@ -74,7 +77,7 @@ export function DraftRoom({ leagueId }: { leagueId: number }) {
 
   if (!state) {
     return (
-      <p className="card text-sm text-slate-500">
+      <p className="card text-sm text-slate-400">
         {loadError ? `Não foi possível carregar o draft (${loadError}). Tentando de novo…` : "Carregando sala de draft…"}
       </p>
     );
@@ -89,35 +92,37 @@ export function DraftRoom({ leagueId }: { leagueId: number }) {
   const counts = (p: Position) => state.myRoster.filter((r) => r.position === p).length;
   const clubCount = (clubId: number) => state.myRoster.filter((r) => r.clubId === clubId).length;
   const blocked = (p: DraftState["available"][number]) =>
-    counts(p.position) >= state.quotas[p.position] ? "posição completa" : clubCount(p.clubId) >= state.clubCap ? "limite do clube" : null;
+    counts(p.position) >= state.quotas[p.position]
+      ? "posição completa"
+      : cannotAdd(state.myRoster, p, state.clubCap);
   const teamsCount = state.order.length || 1;
 
   return (
     <div className="space-y-4">
       {state.status === "DRAFTING" ? (
-        <div className={`card flex items-center justify-between gap-3 ${myTurn ? "bg-emerald-50 ring-emerald-300" : ""}`}>
+        <div className={`card flex items-center justify-between gap-3 ${myTurn ? "bg-linear-to-r from-emerald-500/15 to-transparent ring-emerald-400/40" : ""}`}>
           <div>
             <p className="label">
               Pick {(state.currentPick ?? 0) + 1} de {state.totalPicks} · Rodada {Math.floor((state.currentPick ?? 0) / teamsCount) + 1}
             </p>
-            <p className="text-lg font-bold">{myTurn ? "Sua vez!" : `Na vez: ${teamName(state.onClockTeamId)}`}</p>
-            <p className="text-xs text-slate-500">Se o tempo acabar, o melhor jogador do ranking é escolhido automaticamente.</p>
+            <p className="font-display text-3xl font-extrabold uppercase">{myTurn ? "Sua vez!" : `Na vez: ${teamName(state.onClockTeamId)}`}</p>
+            <p className="text-xs text-slate-400">Se o tempo acabar, o melhor jogador do ranking é escolhido automaticamente.</p>
           </div>
-          <div className={`font-mono text-4xl font-bold tabular-nums ${remaining <= 10 ? "text-red-600" : "text-brand-900"}`}>
+          <div className={`num grid size-20 shrink-0 place-items-center rounded-full text-4xl font-extrabold ring-4 ${remaining <= 10 ? "animate-pulse text-red-400 ring-red-500/50" : "text-white ring-accent/40"}`}>
             {remaining}s
           </div>
         </div>
       ) : (
-        <p className="card bg-emerald-50 font-semibold text-emerald-900">Draft concluído! Confira seu time em “Meu time”.</p>
+        <p className="card bg-emerald-500/10 font-semibold text-emerald-200 ring-emerald-400/30">Draft concluído! Confira seu time em “Meu time”.</p>
       )}
       {(error ?? loadError) && (
-        <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-200">{error ?? `Conexão instável: ${loadError}`}</p>
+        <p className="rounded-xl bg-red-500/10 px-4 py-3 text-sm text-red-200 ring-1 ring-red-500/30">{error ?? `Conexão instável: ${loadError}`}</p>
       )}
 
       <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
         <section className="card">
           <div className="mb-3 flex flex-wrap items-center gap-2">
-            <h2 className="mr-auto font-semibold">Disponíveis</h2>
+            <h2 className="mr-auto text-lg font-bold uppercase">Disponíveis</h2>
             <select className="input w-auto" value={position} onChange={(e) => setPosition(e.target.value as Position | "")}>
               <option value="">Todas</option>
               {(Object.keys(LABEL) as Position[]).map((p) => (
@@ -128,17 +133,18 @@ export function DraftRoom({ leagueId }: { leagueId: number }) {
             </select>
             <input className="input w-36" placeholder="Buscar" value={q} onChange={(e) => setQ(e.target.value)} />
           </div>
-          <ul className="max-h-[28rem] divide-y divide-slate-100 overflow-y-auto text-sm">
+          <ul className="max-h-[28rem] divide-y divide-white/5 overflow-y-auto text-sm">
             {state.available.map((p) => {
               const reason = blocked(p);
               return (
-                <li key={p.playerId} className="flex items-center gap-2 py-1.5">
-                  <span className="w-9 text-[11px] font-bold text-slate-500">{LABEL[p.position]}</span>
+                <li key={p.playerId} className="flex items-center gap-2 rounded-lg px-1 py-1.5 hover:bg-white/[0.03]">
+                  <SubPos position={p.position} sub={p.subPosition} />
+                  <PlayerAvatar name={p.name} photoUrl={p.photoUrl} position={p.position} className="size-7 text-[9px]" />
                   <span className="min-w-0 flex-1 truncate">
                     {p.name} <span className="text-slate-400">· {p.club}</span>
                   </span>
-                  <span className="w-12 text-right tabular-nums text-slate-600">{p.total} pts</span>
-                  <button className="btn px-2 py-1 text-xs" disabled={!myTurn || reason !== null} title={reason ?? ""} onClick={() => void pick(p.playerId)}>
+                  <span className="num w-14 text-right font-semibold text-slate-200" title="Média por jogo">{pts(Math.round(p.avg * 10) / 10)}</span>
+                  <button className="btn-accent px-3 py-1 text-xs" disabled={!myTurn || reason !== null} title={reason ?? ""} onClick={() => void pick(p.playerId)}>
                     Escolher
                   </button>
                 </li>
@@ -148,16 +154,16 @@ export function DraftRoom({ leagueId }: { leagueId: number }) {
         </section>
 
         <section className="card">
-          <h2 className="mb-3 font-semibold">Escolhas</h2>
+          <h2 className="mb-3 text-lg font-bold uppercase">Escolhas</h2>
           <ol className="max-h-[28rem] space-y-1 overflow-y-auto text-sm">
             {[...state.picks].reverse().map((p) => (
-              <li key={p.overall} className={`flex gap-2 rounded px-2 py-1 ${p.teamId === state.myTeamId ? "bg-brand-700/5" : ""}`}>
+              <li key={p.overall} className={`flex items-center gap-2 rounded-lg px-2 py-1.5 ${p.teamId === state.myTeamId ? "bg-accent/[0.06]" : ""}`}>
                 <span className="w-10 tabular-nums text-slate-400">#{p.overall + 1}</span>
                 <span className="w-28 truncate font-medium">{teamName(p.teamId)}</span>
                 <span className="min-w-0 flex-1 truncate">
-                  {LABEL[p.position]} {p.name} <span className="text-slate-400">· {p.club}</span>
+                  <Pos position={p.position} /> {p.name} <span className="text-slate-400">· {p.club}</span>
                 </span>
-                {p.auto && <span className="text-xs text-amber-700">auto</span>}
+                {p.auto && <span className="text-xs text-amber-300">auto</span>}
               </li>
             ))}
           </ol>

@@ -1,10 +1,12 @@
 import { redirect } from "next/navigation";
 import { advanceRoundAction, recalcPointsAction, reprocessRoundAction, syncNowAction } from "@/app/actions";
 import { isReplay, isSimulated, providerName } from "@/providers";
-import { clubNames, pendingStatsMatches, recentSyncLogs, roundsState } from "@/web/queries";
+import { leagueOpenTrades } from "@/server/trades";
+import { clubNames, leagueTeams, pendingStatsMatches, recentSyncLogs, roundsState } from "@/web/queries";
 import { requireMember } from "@/web/session";
 import { SubmitButton } from "@/web/SubmitButton";
 import { Badge, Flash, formatDate, type SearchParams } from "@/web/ui";
+import { DraftSimulation, LeagueSettings, TradeReview } from "./CommissionerPanels";
 
 const TONE = { SUCCESS: "green", PARTIAL: "amber", ERROR: "red", RUNNING: "blue" } as const;
 
@@ -12,21 +14,27 @@ export default async function AdminPage({ params, searchParams }: { params: Prom
   const [{ id }, sp] = await Promise.all([params, searchParams]);
   const { league, isCommissioner, db } = await requireMember(Number(id));
   if (!isCommissioner) redirect(`/leagues/${league.id}`);
-  const [logs, pending, { all, current }, clubs] = await Promise.all([
+  const [logs, pending, { all, current }, clubs, openTrades, teams] = await Promise.all([
     recentSyncLogs(db),
     pendingStatsMatches(db),
     roundsState(db, new Date()),
     clubNames(db),
+    leagueOpenTrades(db, league.id),
+    leagueTeams(db, league.id),
   ]);
+  const teamName = (teamId: number) => teams.find((t) => t.id === teamId)?.name ?? "—";
   const provider = isReplay() ? `api-football · replay ${process.env.API_FOOTBALL_SEASON}/${Number(process.env.API_FOOTBALL_SEASON) + 1 - 2000}` : providerName();
   const hidden = <input type="hidden" name="leagueId" value={league.id} />;
 
   return (
     <div className="space-y-4">
       <Flash sp={sp} />
+      <DraftSimulation league={league} />
+      <TradeReview leagueId={league.id} trades={openTrades} teamName={teamName} />
+      <LeagueSettings league={league} />
       <div className="card space-y-3">
         <div className="flex flex-wrap items-center gap-2">
-          <h2 className="font-semibold">Dados</h2>
+          <h2 className="text-lg font-bold uppercase">Dados</h2>
           <Badge tone={isSimulated() ? "amber" : "green"}>Fonte: {provider}</Badge>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -60,7 +68,7 @@ export default async function AdminPage({ params, searchParams }: { params: Prom
             </form>
           )}
         </div>
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-slate-400">
           O job agendado (/api/cron) roda isso automaticamente. Reprocessar busca de novo na fonte e recalcula, sem fechar a
           rodada.
           {isReplay() && " No replay, cada partida nova custa 1 requisição (plano grátis: 100/dia, 10/min) — jogar uma rodada leva ~2 min."}
@@ -68,17 +76,17 @@ export default async function AdminPage({ params, searchParams }: { params: Prom
       </div>
 
       <div className="card">
-        <h2 className="mb-2 font-semibold">Partidas aguardando dados oficiais ({pending.length})</h2>
+        <h2 className="mb-3 text-lg font-bold uppercase">Partidas aguardando dados oficiais ({pending.length})</h2>
         {pending.length === 0 ? (
-          <p className="text-sm text-slate-500">Nenhuma.</p>
+          <p className="text-sm text-slate-400">Nenhuma.</p>
         ) : (
           <ul className="text-sm">
             {pending.map((m) => (
-              <li key={m.id} className="flex justify-between border-b border-slate-100 py-1">
+              <li key={m.id} className="flex justify-between border-b border-white/5 py-1">
                 <span>
                   {clubs.get(m.homeClubId)?.shortName} × {clubs.get(m.awayClubId)?.shortName}
                 </span>
-                <span className="text-amber-700">{m.statsError ?? "sem estatística"}</span>
+                <span className="text-amber-300">{m.statsError ?? "sem estatística"}</span>
               </li>
             ))}
           </ul>
@@ -86,7 +94,7 @@ export default async function AdminPage({ params, searchParams }: { params: Prom
       </div>
 
       <div className="card overflow-x-auto">
-        <h2 className="mb-2 font-semibold">Log de sincronização</h2>
+        <h2 className="mb-3 text-lg font-bold uppercase">Log de sincronização</h2>
         <table className="table">
           <thead>
             <tr>
@@ -106,7 +114,7 @@ export default async function AdminPage({ params, searchParams }: { params: Prom
                   <Badge tone={TONE[l.status]}>{l.status}</Badge>
                 </td>
                 <td className="text-right">{l.requests}</td>
-                <td className="min-w-48 text-xs text-slate-600">{l.message}</td>
+                <td className="min-w-48 text-xs text-slate-300">{l.message}</td>
               </tr>
             ))}
           </tbody>

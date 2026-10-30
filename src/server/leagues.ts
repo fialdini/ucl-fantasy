@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, asc, count, desc, eq, isNull, notInArray, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import { game } from "@config/game";
 import type { Db, DbOrTx, Tx } from "@/db/client";
 import {
@@ -16,8 +16,10 @@ import {
 } from "@/db/schema";
 import { autoPick, cannotPick, shuffle, snakeOrder, type DraftCandidate } from "@/domain/draft";
 import { currentRound, isRoundLocked, lineupLockState } from "@/domain/lock";
-import { cannotReplace, initialSlots, validateLineup } from "@/domain/roster";
+import { cannotReplace, formationSlots, initialSlots, isFormation, validateLineup } from "@/domain/roster";
+import { subOrDefault } from "@/domain/subpositions";
 import { GameError } from "./errors";
+import { moveRoster, normalizeTeamSlots } from "./roster";
 import { createRegularSchedule } from "./season";
 
 
@@ -51,6 +53,7 @@ export async function createLeague(
         commissionerId: input.userId,
         maxTeams: input.maxTeams,
         startRound: round.order,
+        draftPickSeconds: game.draft.pickSeconds,
       })
       .returning();
     await tx.insert(leagueMembers).values({ leagueId: league!.id, userId: input.userId, role: "COMMISSIONER" });
@@ -105,9 +108,44 @@ export async function startDraft(db: Db, leagueId: number, userId: number, now: 
         random,
       ),
       draftCurrentPick: 0,
-      draftPickDeadline: new Date(now.getTime() + game.draft.pickSeconds * 1000),
+      draftPickDeadline: new Date(now.getTime() + league.draftPickSeconds * 1000),
     })
     .where(eq(leagues.id, leagueId));
+}
+
+export const LEAGUE_LIMITS = {
+  // 1 s = simulação: o draft corre sozinho com auto-picks.
+  draftPickSeconds: { min: 1, max: 24 * 3600 },
+  tradeReviewHours: { min: 0, max: 7 * 24 },
+} as const;
+
+/**
+ * Configurações do comissário. Mudar o tempo de escolha durante o draft também vale para a
+ * escolha em andamento: o relógio dela recomeça com o novo tempo.
+ */
+export async function updateLeagueSettings(
+  db: Db,
+  leagueId: number,
+  userId: number,
+  settings: { draftPickSeconds?: number; tradeReviewHours?: number },
+  now: Date,
+) {
+  await db.transaction(async (tx) => {
+    const league = await lockLeague(tx, leagueId);
+    if (league.commissionerId !== userId) throw new GameError("Só o comissário pode mudar as configurações");
+    const patch: Partial<typeof leagues.$inferInsert> = {};
+    for (const key of ["draftPickSeconds", "tradeReviewHours"] as const) {
+      const value = settings[key];
+      if (value === undefined) continue;
+      const { min, max } = LEAGUE_LIMITS[key];
+      if (!Number.isInteger(value) || value < min || value > max) throw new GameError(`Valor fora do permitido (${min} a ${max})`);
+      patch[key] = value;
+    }
+    if (patch.draftPickSeconds !== undefined && league.status === "DRAFTING") {
+      patch.draftPickDeadline = new Date(now.getTime() + patch.draftPickSeconds * 1000);
+    }
+    await tx.update(leagues).set(patch).where(eq(leagues.id, leagueId));
+  });
 }
 
 /** Ranking do auto-pick: pontos na temporada, depois média; só jogadores ativos de clubes vivos e livres na liga. */
@@ -116,7 +154,7 @@ export async function rankedAvailable(db: DbOrTx, leagueId: number, limit = 5000
   const totals = db
     .select({
       playerId: playerMatchStats.playerId,
-      total: sql<number>`sum(${playerMatchStats.points})`.as("total"),
+      total: sql<number>`round(sum(${playerMatchStats.points})::numeric, 2)`.as("total"),
       games: sql<number>`count(*) filter (where ${playerMatchStats.minutes} > 0)`.as("games"),
     })
     .from(playerMatchStats)
@@ -127,6 +165,7 @@ export async function rankedAvailable(db: DbOrTx, leagueId: number, limit = 5000
       playerId: players.id,
       name: players.name,
       position: players.position,
+      subPosition: players.subPosition,
       clubId: players.clubId,
       clubName: clubs.shortName,
       total: sql<number>`coalesce(${totals.total}, 0)`.mapWith(Number),
@@ -146,9 +185,9 @@ async function lockLeague(tx: Tx, leagueId: number) {
   return league;
 }
 
-async function teamRoster(tx: DbOrTx, teamId: number): Promise<DraftCandidate[]> {
+export async function teamRoster(tx: DbOrTx, teamId: number): Promise<DraftCandidate[]> {
   return tx
-    .select({ playerId: rosterSlots.playerId, position: players.position, clubId: players.clubId })
+    .select({ playerId: rosterSlots.playerId, position: players.position, subPosition: players.subPosition, clubId: players.clubId })
     .from(rosterSlots)
     .innerJoin(players, eq(players.id, rosterSlots.playerId))
     .where(eq(rosterSlots.teamId, teamId));
@@ -176,7 +215,7 @@ async function insertPick(tx: Tx, league: typeof leagues.$inferSelect, teamId: n
   }
   // O prazo do próximo pick conta a partir do pick anterior (picks automáticos encadeiam no tempo).
   const base = auto && league.draftPickDeadline ? league.draftPickDeadline : now;
-  const deadline = new Date(base.getTime() + game.draft.pickSeconds * 1000);
+  const deadline = new Date(base.getTime() + league.draftPickSeconds * 1000);
   await tx.update(leagues).set({ draftCurrentPick: next, draftPickDeadline: deadline }).where(eq(leagues.id, league.id));
   league.draftCurrentPick = next;
   league.draftPickDeadline = deadline;
@@ -281,7 +320,7 @@ export async function setLineup(db: Db, leagueId: number, userId: number, starte
     .where(eq(rosterSlots.teamId, team.id));
   const starters = new Set(starterIds);
   const proposal = roster.map((p) => ({ ...p, slot: starters.has(p.playerId) ? ("STARTER" as const) : ("BENCH" as const) }));
-  const reason = validateLineup(proposal);
+  const reason = validateLineup(proposal, team.formation);
   if (reason) throw new GameError(reason);
   await db.transaction(async (tx) => {
     for (const p of proposal) {
@@ -290,11 +329,72 @@ export async function setLineup(db: Db, leagueId: number, userId: number, starte
   });
 }
 
-async function marketChecks(db: DbOrTx, leagueId: number, userId: number, addPlayerId: number, dropPlayerId: number, roundOrder: number) {
+/**
+ * Troca de lugar um titular e um reserva da mesma posição (arrastar no campinho). Vale só enquanto
+ * a rodada não trava; a escalação resultante continua válida porque a posição se mantém.
+ */
+export async function swapPlayers(db: Db, leagueId: number, userId: number, aId: number, bId: number, now: Date) {
+  await assertUnlocked(db, now);
+  const team = await teamOf(db, leagueId, userId);
+  if (!team) throw new GameError("Você não tem time nesta liga");
+  const rows = await db
+    .select({ playerId: rosterSlots.playerId, position: players.position, subPosition: players.subPosition, slot: rosterSlots.slot })
+    .from(rosterSlots)
+    .innerJoin(players, eq(players.id, rosterSlots.playerId))
+    .where(and(eq(rosterSlots.teamId, team.id), inArray(rosterSlots.playerId, [aId, bId])));
+  const a = rows.find((r) => r.playerId === aId);
+  const b = rows.find((r) => r.playerId === bId);
+  if (!a || !b || aId === bId) throw new GameError("Jogadores precisam estar no seu elenco");
+  if (a.slot === b.slot) throw new GameError("Troque um titular por um reserva");
+  if (subOrDefault(a.position, a.subPosition) !== subOrDefault(b.position, b.subPosition)) {
+    throw new GameError("Só dá para trocar jogadores da mesma sub-posição (lateral por lateral, zagueiro por zagueiro…)");
+  }
+  await db.transaction(async (tx) => {
+    await tx.update(rosterSlots).set({ slot: b.slot }).where(and(eq(rosterSlots.teamId, team.id), eq(rosterSlots.playerId, aId)));
+    await tx.update(rosterSlots).set({ slot: a.slot }).where(and(eq(rosterSlots.teamId, team.id), eq(rosterSlots.playerId, bId)));
+  });
+}
+
+/**
+ * Manda um titular para o banco (o time joga com um a menos) ou leva um reserva para uma vaga livre
+ * da posição dele na formação.
+ */
+export async function moveToSlot(db: Db, leagueId: number, userId: number, playerId: number, slot: "STARTER" | "BENCH", now: Date) {
+  await assertUnlocked(db, now);
+  const team = await teamOf(db, leagueId, userId);
+  if (!team) throw new GameError("Você não tem time nesta liga");
+  const roster = await db
+    .select({ playerId: rosterSlots.playerId, position: players.position, slot: rosterSlots.slot })
+    .from(rosterSlots)
+    .innerJoin(players, eq(players.id, rosterSlots.playerId))
+    .where(eq(rosterSlots.teamId, team.id));
+  const me = roster.find((p) => p.playerId === playerId);
+  if (!me) throw new GameError("Jogador não está no seu elenco");
+  if (me.slot === slot) return;
+  if (slot === "STARTER") {
+    const used = roster.filter((p) => p.position === me.position && p.slot === "STARTER").length;
+    if (used >= formationSlots(team.formation)[me.position]) throw new GameError("Não há vaga livre para essa posição na formação: troque por um titular");
+  }
+  await db.update(rosterSlots).set({ slot }).where(and(eq(rosterSlots.teamId, team.id), eq(rosterSlots.playerId, playerId)));
+}
+
+/** Troca a formação e reorganiza titulares/banco para ela (o time ajusta depois, se quiser). */
+export async function setFormation(db: Db, leagueId: number, userId: number, formation: string, now: Date) {
+  await assertUnlocked(db, now);
+  if (!isFormation(formation)) throw new GameError("Formação inválida");
+  const team = await teamOf(db, leagueId, userId);
+  if (!team) throw new GameError("Você não tem time nesta liga");
+  await db.transaction(async (tx) => {
+    await tx.update(fantasyTeams).set({ formation }).where(eq(fantasyTeams.id, team.id));
+    await normalizeTeamSlots(tx, team.id);
+  });
+}
+
+async function marketChecks(db: DbOrTx, leagueId: number, userId: number, addPlayerId: number, dropPlayerId: number | null, roundOrder: number) {
   const team = await teamOf(db, leagueId, userId);
   if (!team) throw new GameError("Você não tem time nesta liga");
   const [add] = await db
-    .select({ position: players.position, clubId: players.clubId, active: players.active, eliminated: clubs.eliminatedAfterRound })
+    .select({ position: players.position, subPosition: players.subPosition, clubId: players.clubId, active: players.active, eliminated: clubs.eliminatedAfterRound })
     .from(players)
     .innerJoin(clubs, eq(clubs.id, players.clubId))
     .where(eq(players.id, addPlayerId));
@@ -306,25 +406,34 @@ async function marketChecks(db: DbOrTx, leagueId: number, userId: number, addPla
   return team;
 }
 
-/** Free agent: troca imediata, só fora de janela de waiver e com a rodada destravada. */
-export async function addFreeAgent(db: Db, leagueId: number, userId: number, addPlayerId: number, dropPlayerId: number, now: Date) {
+/**
+ * Free agent: contratação imediata, só fora de janela de waiver e com a rodada destravada.
+ * `dropPlayerId` null = sem dispensa (precisa haver vaga no elenco).
+ */
+export async function addFreeAgent(db: Db, leagueId: number, userId: number, addPlayerId: number, dropPlayerId: number | null, now: Date) {
   const round = await assertUnlocked(db, now);
   const [league] = await db.select().from(leagues).where(eq(leagues.id, leagueId));
   if (league?.status !== "ACTIVE") throw new GameError("A liga não está ativa");
   if (league.waiverProcessAt) throw new GameError("Janela de waiver aberta: faça um pedido de waiver");
-  const team = await marketChecks(db, leagueId, userId, addPlayerId, dropPlayerId, round?.order ?? 1);
-  try {
-    await db
-      .update(rosterSlots)
-      .set({ playerId: addPlayerId, acquiredVia: "FREE_AGENT", acquiredAt: now })
-      .where(and(eq(rosterSlots.teamId, team.id), eq(rosterSlots.playerId, dropPlayerId)));
-  } catch {
-    // índice único (liga, jogador): alguém pegou antes
-    throw new GameError("Jogador já pertence a outro time");
-  }
+  await db.transaction(async (tx) => {
+    const team = await marketChecks(tx, leagueId, userId, addPlayerId, dropPlayerId, round?.order ?? 1);
+    await moveRoster(tx, { leagueId, teamId: team.id, add: [addPlayerId], drop: dropPlayerId === null ? [] : [dropPlayerId], via: "FREE_AGENT", now });
+  });
 }
 
-export async function createWaiverClaim(db: Db, leagueId: number, userId: number, addPlayerId: number, dropPlayerId: number, now: Date) {
+/** Dispensa um jogador sem repor: ele volta a ficar livre e o elenco ganha uma vaga. */
+export async function dropPlayer(db: Db, leagueId: number, userId: number, playerId: number, now: Date) {
+  await assertUnlocked(db, now);
+  const [league] = await db.select().from(leagues).where(eq(leagues.id, leagueId));
+  if (league?.status !== "ACTIVE") throw new GameError("A liga não está ativa");
+  const team = await teamOf(db, leagueId, userId);
+  if (!team) throw new GameError("Você não tem time nesta liga");
+  const roster = await teamRoster(db, team.id);
+  if (!roster.some((p) => p.playerId === playerId)) throw new GameError("Jogador não está no seu elenco");
+  await db.transaction((tx) => moveRoster(tx, { leagueId, teamId: team.id, drop: [playerId], via: "FREE_AGENT", now }));
+}
+
+export async function createWaiverClaim(db: Db, leagueId: number, userId: number, addPlayerId: number, dropPlayerId: number | null, now: Date) {
   const round = await assertUnlocked(db, now);
   const [league] = await db.select().from(leagues).where(eq(leagues.id, leagueId));
   if (!league?.waiverProcessAt) throw new GameError("Não há janela de waiver aberta: contrate como free agent");

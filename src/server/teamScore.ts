@@ -2,7 +2,9 @@ import { and, eq, inArray } from "drizzle-orm";
 import type { DbOrTx } from "@/db/client";
 import { lineupSnapshots, matches, playerMatchStats, players, rosterSlots, rounds } from "@/db/schema";
 import { teamScore, type PlayerRoundStatus } from "@/domain/matchup";
+import { roundPoints } from "@/domain/scoring";
 import type { Position, Slot } from "@/domain/types";
+import { managerFor, managerRoundScore, type ManagerRoundScore } from "./manager";
 
 export interface TeamRoundLine {
   playerId: number;
@@ -22,6 +24,8 @@ export interface TeamRoundScore {
   /** true = escalação congelada (rodada travada); false = projeção com o elenco atual. */
   locked: boolean;
   lines: TeamRoundLine[];
+  /** Técnico do time na rodada (já somado em `points`). */
+  manager: ManagerRoundScore | null;
 }
 
 /** Escalação que vale para a rodada: a congelada, ou o elenco atual se a rodada ainda não travou. */
@@ -40,7 +44,9 @@ export async function lineupFor(db: DbOrTx, teamId: number, roundOrder: number) 
 
 export async function teamRoundScore(db: DbOrTx, teamId: number, roundOrder: number): Promise<TeamRoundScore> {
   const { locked, slots } = await lineupFor(db, teamId, roundOrder);
-  if (slots.length === 0) return { points: 0, awaitingData: false, locked, lines: [] };
+  const coachId = await managerFor(db, teamId, roundOrder, locked);
+  const manager = coachId === null ? null : await managerRoundScore(db, coachId, roundOrder);
+  if (slots.length === 0) return { points: roundPoints(manager?.points ?? 0), awaitingData: manager?.status === "PENDING", locked, lines: [], manager };
   const ids = slots.map((s) => s.playerId);
   const [playerRows, roundMatches, statRows] = await Promise.all([
     db.select().from(players).where(inArray(players.id, ids)),
@@ -89,7 +95,13 @@ export async function teamRoundScore(db: DbOrTx, teamId: number, roundOrder: num
       breakdown: line.status === "SCORED" ? (stat?.breakdown ?? []) : [],
     };
   });
-  return { points: score.points, awaitingData: score.awaitingData, locked, lines };
+  return {
+    points: roundPoints(score.points + (manager?.points ?? 0)),
+    awaitingData: score.awaitingData || manager?.status === "PENDING",
+    locked,
+    lines,
+    manager,
+  };
 }
 
 /** Pontos de um time somados nas rodadas de um confronto (playoffs somam 2 pernas). */
@@ -104,7 +116,7 @@ export async function teamSpanScore(db: DbOrTx, teamId: number, fromRound: numbe
     // Rodada que ainda não travou não conta (escalação pode mudar).
     if (!s.locked) continue;
     started = true;
-    points += s.points;
+    points = roundPoints(points + s.points);
     awaitingData ||= s.awaitingData;
   }
   return { points, awaitingData, started };

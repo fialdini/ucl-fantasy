@@ -74,9 +74,9 @@ export class ReplayProvider implements FootballDataProvider {
     return new Set((await this.getFixtures()).filter((f) => f.status === "FINISHED").map((f) => f.id));
   }
 
-  async getMatchDetails(matchIds: readonly number[]): Promise<MatchDetail[]> {
+  async getMatchDetails(matchIds: readonly number[], options?: { fresh?: boolean; cacheOnly?: boolean }): Promise<MatchDetail[]> {
     const revealed = await this.revealedFinishedIds();
-    return this.inner.getMatchDetails(matchIds.filter((id) => revealed.has(id)));
+    return this.inner.getMatchDetails(matchIds.filter((id) => revealed.has(id)), options);
   }
 
   async getSquad(clubId: number): Promise<ProviderPlayer[]> {

@@ -1,5 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { beforeAll, describe, expect, it } from "vitest";
+import { game } from "@config/game";
 import { createDb, type Db } from "@/db/client";
 import { leagues, matches, matchups, playerMatchStats, players, rosterSlots, rounds, users, waiverClaims, clubs } from "@/db/schema";
 import { validateLineup } from "@/domain/roster";
@@ -53,9 +54,9 @@ describe("ciclo completo com o provider mock", () => {
     for (let i = 1; i < 6; i++) await joinLeague(db, { userId: userIds[i]!, code: league.inviteCode, teamName: `T${i}` });
 
     await startDraft(db, leagueId, userIds[0]!, now, mulberry32(1));
-    // Ninguém escolhe: 90 picks automáticos vencem em sequência.
+    // Ninguém escolhe: todos os picks automáticos vencem em sequência.
     const made = await advanceDraft(db, leagueId, new Date(now.getTime() + 2 * 3_600_000));
-    expect(made).toBe(90);
+    expect(made).toBe(6 * game.roster.size);
     const [l] = await db.select().from(leagues).where(eq(leagues.id, leagueId));
     expect(l?.status).toBe("ACTIVE");
 
@@ -64,7 +65,7 @@ describe("ciclo completo com o provider mock", () => {
       .from(rosterSlots)
       .innerJoin(players, eq(players.id, rosterSlots.playerId))
       .where(eq(rosterSlots.leagueId, leagueId));
-    expect(new Set(slots.map((s) => s.playerId)).size).toBe(90);
+    expect(new Set(slots.map((s) => s.playerId)).size).toBe(6 * game.roster.size);
     for (const teamId of new Set(slots.map((s) => s.teamId))) {
       const roster = slots.filter((s) => s.teamId === teamId);
       expect(validateLineup(roster)).toBeNull();
@@ -116,7 +117,7 @@ describe("ciclo completo com o provider mock", () => {
     const owner = userIds[0]!;
     const [teamRow] = await db.query.fantasyTeams.findMany({ where: (t, { eq: e, and: a }) => a(e(t.leagueId, leagueId), e(t.userId, owner)) });
     const roster = await db
-      .select({ playerId: rosterSlots.playerId, position: players.position })
+      .select({ playerId: rosterSlots.playerId, position: players.position, subPosition: players.subPosition })
       .from(rosterSlots)
       .innerJoin(players, eq(players.id, rosterSlots.playerId))
       .where(eq(rosterSlots.teamId, teamRow!.id));
@@ -128,7 +129,7 @@ describe("ciclo completo com o provider mock", () => {
       .where(eq(rosterSlots.teamId, teamRow!.id));
     const counts = new Map<number, number>();
     for (const c of clubsOnRoster) counts.set(c.clubId, (counts.get(c.clubId) ?? 0) + 1);
-    const add = (await rankedAvailable(db, leagueId)).find((p) => p.position === "FWD" && (counts.get(p.clubId) ?? 0) < 3)!;
+    const add = (await rankedAvailable(db, leagueId)).find((p) => p.position === "FWD" && p.subPosition === drop.subPosition && (counts.get(p.clubId) ?? 0) < 3)!;
     await createWaiverClaim(db, leagueId, owner, add.playerId, drop.playerId, now);
 
     // Antes do prazo nada acontece

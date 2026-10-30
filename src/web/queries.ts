@@ -16,6 +16,7 @@ import {
   waiverClaims,
 } from "@/db/schema";
 import { currentRound, isRoundLocked } from "@/domain/lock";
+import type { SubPosition } from "@/domain/subpositions";
 import type { Position } from "@/domain/types";
 
 export async function myLeagues(db: Db, userId: number) {
@@ -47,7 +48,7 @@ const seasonTotals = (db: Db) =>
   db
     .select({
       playerId: playerMatchStats.playerId,
-      total: sql<number>`sum(${playerMatchStats.points})`.as("total"),
+      total: sql<number>`round(sum(${playerMatchStats.points})::numeric, 2)`.as("total"),
       games: sql<number>`count(*) filter (where ${playerMatchStats.minutes} > 0)`.as("games"),
     })
     .from(playerMatchStats)
@@ -61,7 +62,13 @@ export async function rosterView(db: Db, teamId: number) {
       playerId: players.id,
       name: players.name,
       position: players.position,
+      subPosition: players.subPosition,
+      photoUrl: players.photoUrl,
       active: players.active,
+      injured: players.injured,
+      injuryReturn: players.injuryReturn,
+      injurySource: players.injurySource,
+      injuryNote: players.injuryNote,
       club: clubs.shortName,
       clubId: clubs.id,
       eliminated: clubs.eliminatedAfterRound,
@@ -79,10 +86,13 @@ export async function rosterView(db: Db, teamId: number) {
 export interface PlayerFilter {
   leagueId: number;
   position?: Position;
+  subPosition?: SubPosition;
   clubId?: number;
   q?: string;
   onlyFree?: boolean;
-  sort?: "total" | "avg";
+  /** Só jogadores que já têm time na liga. */
+  onlyOwned?: boolean;
+  sort?: "total" | "avg" | "name";
   limit?: number;
 }
 
@@ -97,6 +107,8 @@ export async function searchPlayers(db: Db, f: PlayerFilter) {
     .as("owner");
   const conditions: SQL[] = [eq(players.active, true)];
   if (f.position) conditions.push(eq(players.position, f.position));
+  if (f.subPosition) conditions.push(eq(players.subPosition, f.subPosition));
+  if (f.onlyOwned) conditions.push(sql`${owner.playerId} is not null`);
   if (f.clubId) conditions.push(eq(players.clubId, f.clubId));
   if (f.q) conditions.push(ilike(players.name, `%${f.q}%`));
   if (f.onlyFree) conditions.push(sql`${owner.playerId} is null`);
@@ -106,6 +118,12 @@ export async function searchPlayers(db: Db, f: PlayerFilter) {
       playerId: players.id,
       name: players.name,
       position: players.position,
+      subPosition: players.subPosition,
+      photoUrl: players.photoUrl,
+      injured: players.injured,
+      injuryReturn: players.injuryReturn,
+      injurySource: players.injurySource,
+      injuryNote: players.injuryNote,
       club: clubs.shortName,
       clubId: clubs.id,
       eliminated: clubs.eliminatedAfterRound,
@@ -120,8 +138,15 @@ export async function searchPlayers(db: Db, f: PlayerFilter) {
     .leftJoin(totals, eq(totals.playerId, players.id))
     .leftJoin(owner, eq(owner.playerId, players.id))
     .where(and(...conditions))
-    .orderBy(f.sort === "avg" ? desc(avg) : desc(sql`coalesce(${totals.total}, 0)`), asc(players.name))
+    .orderBy(...(f.sort === "name" ? [asc(players.name)] : f.sort === "avg" ? [desc(avg), asc(players.name)] : [desc(sql`coalesce(${totals.total}, 0)`), asc(players.name)]))
     .limit(f.limit ?? 100);
+}
+
+/** Partidas agrupadas por rodada (para byes). */
+export async function matchesByRound(db: Db) {
+  const map = new Map<number, Array<typeof matches.$inferSelect>>();
+  for (const m of await db.select().from(matches)) map.set(m.roundOrder, [...(map.get(m.roundOrder) ?? []), m]);
+  return map;
 }
 
 export async function allClubs(db: Db) {

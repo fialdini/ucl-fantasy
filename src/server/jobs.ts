@@ -1,21 +1,26 @@
-import { and, desc, eq, inArray, isNull, lte, ne, notInArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lte, ne, notInArray, sql } from "drizzle-orm";
 import { competitionRounds, game } from "@config/game";
 import type { Db, DbOrTx } from "@/db/client";
 import {
   clubs,
+  coaches,
   fantasyTeams,
   leagues,
   lineupSnapshots,
+  managerSnapshots,
   matches,
   matchups,
   playerMatchStats,
   players,
   rosterSlots,
   rounds,
+  playerHistory,
   syncLogs,
   waiverClaims,
 } from "@/db/schema";
+import { inferAvailability } from "@/domain/availability";
 import { isRoundLocked, currentRound } from "@/domain/lock";
+import { subOrDefault } from "@/domain/subpositions";
 import { matchupWinner, waiverOrder } from "@/domain/matchup";
 import {
   knockoutLosers,
@@ -27,8 +32,11 @@ import { computePoints, deriveRawStats } from "@/domain/scoring";
 import type { MatchDetail } from "@/domain/types";
 import { resolveWaivers } from "@/domain/waivers";
 import type { FootballDataProvider } from "@/providers/types";
+import { moveRoster } from "./roster";
+import { getSetting, setSetting } from "./settings";
 import { advancePlayoffs, leagueStandings } from "./season";
 import { teamSpanScore } from "./teamScore";
+import { processTradeReviews } from "./trades";
 
 export interface JobContext {
   db: Db;
@@ -133,7 +141,10 @@ export async function syncSquads(ctx: JobContext): Promise<JobResult> {
           position: p.position,
           clubId: p.clubId,
           photoUrl: p.photoUrl,
-          injured: p.injured,
+          subPosition: subOrDefault(p.position, p.subPosition),
+          ...(p.birthDate ? { birthDate: p.birthDate } : {}),
+          // Lesão só quando a fonte de elencos informa; senão fica com a fonte de lesões.
+          ...(p.injuryReturn !== undefined ? { injured: p.injured, injuryReturn: p.injuryReturn, injuryUpdatedAt: new Date() } : {}),
           active: true,
           updatedAt: new Date(),
         };
@@ -142,6 +153,19 @@ export async function syncSquads(ctx: JobContext): Promise<JobResult> {
     } catch {
       failed.push(club.id);
     }
+  }
+  // Técnicos: um por clube; quem deixou de ser o principal fica inativo (mas continua com quem o contratou).
+  let coachCount = 0;
+  try {
+    const found = (await provider.getCoaches?.()) ?? [];
+    for (const c of found) {
+      const values = { name: c.name, clubId: c.clubId, photoUrl: c.photoUrl, active: true, updatedAt: new Date() };
+      await db.insert(coaches).values({ id: c.id, ...values }).onConflictDoUpdate({ target: coaches.id, set: values });
+      await db.update(coaches).set({ active: false }).where(and(eq(coaches.clubId, c.clubId), ne(coaches.id, c.id)));
+      coachCount++;
+    }
+  } catch {
+    failed.push(-1);
   }
   // Quem sumiu de todos os elencos (transferido para fora da competição/desligado) fica inativo.
   let deactivated = 0;
@@ -154,10 +178,64 @@ export async function syncSquads(ctx: JobContext): Promise<JobResult> {
     deactivated = rows.length;
   }
   return {
-    message: `${seen.size} jogadores em ${clubRows.length - failed.length} clubes; ${deactivated} inativados`,
+    message: `${seen.size} jogadores em ${clubRows.length - failed.length} clubes; ${coachCount} técnicos; ${deactivated} inativados`,
     details: failed.length ? { failedClubs: failed } : undefined,
     status: failed.length ? "PARTIAL" : "SUCCESS",
   };
+}
+
+// ---------- Lesões automáticas ----------
+
+/**
+ * Lê as súmulas para marcar dúvidas físicas (ver domain/availability). Só busca na rede as escalações
+ * de partidas começando em até 3 horas (a UEFA publica ~1h antes); o resto vem do banco.
+ */
+export async function syncAvailability(ctx: JobContext): Promise<JobResult> {
+  const { db, provider, now } = ctx;
+  const all = await db.select().from(matches).orderBy(asc(matches.kickoff));
+  const lastFinished = new Map<number, number>();
+  const nextOpen = new Map<number, (typeof all)[number]>();
+  for (const m of all) {
+    for (const club of [m.homeClubId, m.awayClubId]) {
+      if (m.status === "FINISHED") lastFinished.set(club, m.id);
+      else if (!nextOpen.has(club) && m.status !== "CANCELLED" && m.status !== "POSTPONED") nextOpen.set(club, m);
+    }
+  }
+  const soon = [...new Set([...nextOpen.values()])].filter((m) => m.kickoff.getTime() - now.getTime() <= 3 * HOUR);
+  const squads = provider.getMatchdaySquads && soon.length ? await provider.getMatchdaySquads(soon.map((m) => m.id)) : [];
+  const squadOf = new Map<number, Set<number>>();
+  for (const sq of squads) for (const [club, ids] of sq.clubs) squadOf.set(club, ids);
+
+  const lastIds = [...new Set(lastFinished.values())];
+  const stats = lastIds.length ? await db.select().from(playerMatchStats).where(inArray(playerMatchStats.matchId, lastIds)) : [];
+  const lastOf = new Map(stats.map((s) => [`${s.matchId}:${s.playerId}`, s]));
+  const roster = await db.select().from(players).where(eq(players.active, true));
+
+  let flagged = 0;
+  let cleared = 0;
+  for (const p of roster) {
+    const lastMatch = lastFinished.get(p.clubId);
+    const stat = lastMatch ? lastOf.get(`${lastMatch}:${p.id}`) : undefined;
+    const squad = squadOf.get(p.clubId);
+    const action = inferAvailability({
+      position: p.position,
+      injured: p.injured,
+      source: p.injured ? (p.injurySource ?? "MANUAL") : null,
+      last: stat ? { minutes: stat.minutes, started: stat.started, redCard: stat.redCards > 0 } : null,
+      nextSquad: squad ? (squad.has(p.id) ? "IN" : "OUT") : null,
+    });
+    if (action?.type === "FLAG" && !(p.injured && p.injurySource === "AUTO" && p.injuryNote === action.note)) {
+      await db
+        .update(players)
+        .set({ injured: true, injuryReturn: "DOUBTFUL", injurySource: "AUTO", injuryNote: action.note, injuryUpdatedAt: now })
+        .where(eq(players.id, p.id));
+      flagged++;
+    } else if (action?.type === "CLEAR") {
+      await db.update(players).set({ injured: false, injuryReturn: null, injurySource: null, injuryNote: null, injuryUpdatedAt: now }).where(eq(players.id, p.id));
+      cleared++;
+    }
+  }
+  return { message: `${flagged} marcados como dúvida, ${cleared} liberados; ${squadOf.size} escalações lidas` };
 }
 
 // ---------- Estatísticas e pontos ----------
@@ -169,7 +247,7 @@ async function registerNewPlayers(db: DbOrTx, detail: MatchDetail) {
   const clubIds = new Set((await db.select({ id: clubs.id }).from(clubs)).map((c) => c.id));
   const rows = candidates
     .filter((p) => clubIds.has(p.clubId))
-    .map((p) => ({ id: p.playerId, name: p.name, position: p.position!, clubId: p.clubId }));
+    .map((p) => ({ id: p.playerId, name: p.name, position: p.position!, clubId: p.clubId, subPosition: subOrDefault(p.position!, null) }));
   if (rows.length) await db.insert(players).values(rows).onConflictDoNothing({ target: players.id });
 }
 
@@ -197,6 +275,7 @@ async function storeMatchStats(db: DbOrTx, detail: MatchDetail, final: boolean):
         position,
         ...stats,
         cleanSheet: score.cleanSheet,
+        started: detail.players.some((p) => p.playerId === playerId && p.substitute === false),
         points: score.points,
         breakdown: score.breakdown,
         final,
@@ -254,14 +333,39 @@ export async function syncMatchStats(
   };
 }
 
-/** Recalcula pontos a partir das estatísticas salvas (após mudar a tabela de pontuação). Não chama a API. */
-export async function recalcPoints(db: Db, roundOrder?: number): Promise<JobResult> {
+/**
+ * Recalcula pontos (após mudar a tabela de pontuação). Não chama a API: relê as súmulas que estão
+ * no cache do provider — assim scouts novos também chegam às partidas antigas — e, para as que não
+ * estão, repontua com as estatísticas já salvas.
+ */
+export async function recalcPoints(ctx: JobContext, roundOrder?: number): Promise<JobResult> {
+  const { db, provider } = ctx;
+  const scored = await db
+    .select({ id: matches.id, statsStatus: matches.statsStatus })
+    .from(matches)
+    .where(
+      and(
+        eq(matches.status, "FINISHED"),
+        inArray(matches.statsStatus, ["PARTIAL", "FINAL"]),
+        roundOrder === undefined ? undefined : eq(matches.roundOrder, roundOrder),
+      ),
+    );
+  const finalById = new Map(scored.map((m) => [m.id, m.statsStatus === "FINAL"]));
+  const cached = scored.length ? await provider.getMatchDetails([...finalById.keys()], { cacheOnly: true }) : [];
+  const reread = new Set<number>();
+  for (const detail of cached) {
+    if (detail.players.length === 0) continue;
+    await storeMatchStats(db, detail, finalById.get(detail.matchId) ?? false);
+    reread.add(detail.matchId);
+  }
+
   const rows = await db
     .select({ stat: playerMatchStats, position: players.position })
     .from(playerMatchStats)
     .innerJoin(players, eq(players.id, playerMatchStats.playerId))
     .where(roundOrder === undefined ? undefined : eq(playerMatchStats.roundOrder, roundOrder));
   for (const { stat, position } of rows) {
+    if (reread.has(stat.matchId)) continue;
     const score = computePoints(position, stat);
     await db
       .update(playerMatchStats)
@@ -270,7 +374,7 @@ export async function recalcPoints(db: Db, roundOrder?: number): Promise<JobResu
   }
   const affected = new Set(rows.map((r) => r.stat.roundOrder));
   for (const order of affected) await updateMatchupScores(db, order);
-  return { message: `${rows.length} linhas recalculadas` };
+  return { message: `${reread.size} partida(s) relidas do cache, ${rows.filter((r) => !reread.has(r.stat.matchId)).length} linha(s) repontuadas` };
 }
 
 // ---------- Escalações e confrontos ----------
@@ -298,6 +402,8 @@ export async function ensureLineupSnapshots(db: DbOrTx, now: Date, onlyRound?: n
       await db
         .insert(lineupSnapshots)
         .values(slots.map((s) => ({ teamId: team.id, roundOrder: round.order, playerId: s.playerId, slot: s.slot })));
+      const [{ managerId } = { managerId: null }] = await db.select({ managerId: fantasyTeams.managerId }).from(fantasyTeams).where(eq(fantasyTeams.id, team.id));
+      if (managerId !== null) await db.insert(managerSnapshots).values({ teamId: team.id, roundOrder: round.order, coachId: managerId }).onConflictDoNothing();
       created++;
     }
   }
@@ -451,10 +557,14 @@ export async function processWaivers(ctx: JobContext): Promise<JobResult> {
         clubCap: game.roster.clubCap(round?.order ?? 1),
       });
       for (const move of result.moves) {
-        await tx
-          .update(rosterSlots)
-          .set({ playerId: move.addPlayerId, acquiredVia: "WAIVER", acquiredAt: now })
-          .where(and(eq(rosterSlots.teamId, move.teamId), eq(rosterSlots.playerId, move.dropPlayerId)));
+        await moveRoster(tx, {
+          leagueId: league.id,
+          teamId: move.teamId,
+          add: [move.addPlayerId],
+          drop: move.dropPlayerId === null ? [] : [move.dropPlayerId],
+          via: "WAIVER",
+          now,
+        });
       }
       for (const o of result.outcomes) {
         await tx
@@ -467,6 +577,46 @@ export async function processWaivers(ctx: JobContext): Promise<JobResult> {
     });
   }
   return { message: `${due.length} liga(s) processada(s), ${succeeded} pedido(s) atendido(s)` };
+}
+
+// ---------- Histórico da temporada anterior ----------
+
+const HISTORY_DONE_KEY = "history.previousSeason.done";
+
+/**
+ * Busca uma vez a temporada anterior (súmulas e estatísticas) para o histórico na página do jogador.
+ * Fica tudo em cache: rodar de novo não repete requisições.
+ */
+export async function syncHistory(ctx: JobContext): Promise<JobResult> {
+  const { db, provider } = ctx;
+  if (!provider.getPreviousSeason) return { message: "Fonte sem temporada anterior" };
+  const { seasonYear, matches: list } = await provider.getPreviousSeason();
+  let rows = 0;
+  for (const m of list) {
+    const values = [...deriveRawStats(m.detail)].flatMap(([playerId, { clubId, stats }]) => {
+      if (stats.minutes <= 0) return [];
+      const p = m.detail.players.find((x) => x.playerId === playerId);
+      const home = clubId === m.detail.homeClubId;
+      return [
+        {
+          seasonYear,
+          matchId: m.detail.matchId,
+          playerId,
+          roundOrder: m.roundOrder,
+          kickoff: m.kickoff,
+          clubName: home ? m.homeName : m.awayName,
+          opponentName: home ? m.awayName : m.homeName,
+          home,
+          position: p?.position ?? "MID",
+          stats: stats as unknown as Record<string, number>,
+        },
+      ];
+    });
+    if (values.length) await db.insert(playerHistory).values(values).onConflictDoNothing();
+    rows += values.length;
+  }
+  if (list.length > 0) await setSetting(db, HISTORY_DONE_KEY, true);
+  return { message: `Temporada ${seasonYear - 1}/${String(seasonYear).slice(2)}: ${list.length} partidas, ${rows} atuações` };
 }
 
 // ---------- Orquestração (cron) ----------
@@ -511,6 +661,7 @@ async function runScheduledJobsNow(ctx: JobContext, options: { forceCalendar?: b
     results.squads = await withSyncLog(ctx, "squads", () => syncSquads(ctx));
   }
   results.stats = await withSyncLog(ctx, "match-stats", () => syncMatchStats(ctx));
+  results.availability = await withSyncLog(ctx, "availability", () => syncAvailability(ctx));
   await ensureLineupSnapshots(db, now);
 
   const round = currentRound(await db.select().from(rounds));
@@ -523,5 +674,11 @@ async function runScheduledJobsNow(ctx: JobContext, options: { forceCalendar?: b
     });
   }
   results.waivers = await withSyncLog(ctx, "waivers", () => processWaivers(ctx));
+  // Só registra no log quando há troca com a revisão vencida.
+  const reviews = await processTradeReviews(db, now);
+  if (reviews) results.trades = await withSyncLog(ctx, "trade-reviews", async () => reviews);
+  if (ctx.provider.getPreviousSeason && !(await getSetting<boolean>(db, HISTORY_DONE_KEY))) {
+    results.history = await withSyncLog(ctx, "history", () => syncHistory(ctx));
+  }
   return results;
 }

@@ -5,6 +5,7 @@ import { getSetting, setSetting } from "@/server/settings";
 import { ApiFootballProvider } from "./apiFootball/provider";
 import { MockProvider } from "./mock/provider";
 import { ReplayProvider } from "./replay";
+import { UefaProvider } from "./uefa/provider";
 import type { FootballDataProvider, ResponseCache } from "./types";
 
 export const MOCK_ANCHOR_KEY = "mock.anchor";
@@ -26,8 +27,11 @@ export function dbResponseCache(db: Db, provider: string): ResponseCache {
   };
 }
 
-export function providerName(): "mock" | "api-football" {
-  return process.env.DATA_PROVIDER === "api-football" ? "api-football" : "mock";
+export type ProviderName = "mock" | "api-football" | "uefa";
+
+export function providerName(): ProviderName {
+  const name = process.env.DATA_PROVIDER;
+  return name === "api-football" || name === "uefa" ? name : "mock";
 }
 
 /** Replay: temporada encerrada reapresentada no tempo atual (para testar com dados reais). */
@@ -42,6 +46,14 @@ export function isSimulated(): boolean {
 
 /** Provider configurado por ambiente. `now` só afeta mock e replay (testes controlam o relógio). */
 export async function getProvider(db: Db, now: () => Date = () => new Date()): Promise<FootballDataProvider> {
+  if (providerName() === "uefa") {
+    return new UefaProvider({
+      seasonYear: Number(process.env.UEFA_SEASON_YEAR ?? 2027),
+      competitionId: Number(process.env.UEFA_COMPETITION_ID ?? 1),
+      minIntervalMs: Number(process.env.UEFA_MIN_INTERVAL_MS ?? 400),
+      cache: dbResponseCache(db, "uefa"),
+    });
+  }
   if (providerName() === "api-football") {
     const apiKey = process.env.API_FOOTBALL_KEY;
     if (!apiKey) throw new Error("API_FOOTBALL_KEY não configurada");

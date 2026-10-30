@@ -1,3 +1,4 @@
+import { roundPoints } from "./scoring";
 import type { MatchStatus } from "./types";
 
 export type StatsStatus = "NONE" | "PARTIAL" | "FINAL";
@@ -37,7 +38,7 @@ export function teamScore(starters: readonly StarterInput[]): {
     return { playerId: s.playerId, status, points: status === "SCORED" ? (s.points ?? 0) : 0 };
   });
   return {
-    points: lines.reduce((sum, l) => sum + l.points, 0),
+    points: roundPoints(lines.reduce((sum, l) => sum + l.points, 0)),
     awaitingData: lines.some((l) => l.status === "AWAITING_DATA"),
     lines,
   };
@@ -88,10 +89,10 @@ export function computeStandings(
     const home = rows.get(m.homeTeamId);
     const away = rows.get(m.awayTeamId);
     if (!home || !away) continue;
-    home.pointsFor += m.homePoints;
-    home.pointsAgainst += m.awayPoints;
-    away.pointsFor += m.awayPoints;
-    away.pointsAgainst += m.homePoints;
+    home.pointsFor = roundPoints(home.pointsFor + m.homePoints);
+    home.pointsAgainst = roundPoints(home.pointsAgainst + m.awayPoints);
+    away.pointsFor = roundPoints(away.pointsFor + m.awayPoints);
+    away.pointsAgainst = roundPoints(away.pointsAgainst + m.homePoints);
     if (m.winnerTeamId === null) {
       home.ties++;
       away.ties++;

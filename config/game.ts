@@ -27,12 +27,27 @@ export const game = {
   league: { minTeams: 6, maxTeams: 12 },
 
   roster: {
-    size: 15,
+    /** Tamanho do elenco no draft e máximo depois dele (trocas desiguais podem deixar vagas). */
+    /** 11 titulares + 8 reservas. */
+    size: 19,
     starters: { GK: 1, DEF: 4, MID: 4, FWD: 2 } satisfies Record<Position, number>,
-    bench: { GK: 1, DEF: 1, MID: 1, FWD: 1 } satisfies Record<Position, number>,
+    /** Banco do draft: cota final 2 GOL, 6 DEF, 7 MEI, 4 ATA — cobre todas as formações (5-3-2, 3-5-2, 4-3-3…). */
+    bench: { GK: 1, DEF: 2, MID: 3, FWD: 2 } satisfies Record<Position, number>,
+    /** Máximo por posição depois do draft. */
+    maxPerPosition: { GK: 3, DEF: 8, MID: 8, FWD: 6 } satisfies Record<Position, number>,
     /** Máximo de jogadores do mesmo clube, por fase. Sobe após a fase de liga para aliviar a escassez. */
     clubCap: (roundOrder: number) => (roundOrder <= 8 ? 3 : 4),
   },
+
+  /** Formações que o time pode escolher (titulares por posição; sempre 11). */
+  formations: {
+    "4-4-2": { GK: 1, DEF: 4, MID: 4, FWD: 2 },
+    "4-3-3": { GK: 1, DEF: 4, MID: 3, FWD: 3 },
+    "3-5-2": { GK: 1, DEF: 3, MID: 5, FWD: 2 },
+    "4-5-1": { GK: 1, DEF: 4, MID: 5, FWD: 1 },
+    "5-3-2": { GK: 1, DEF: 5, MID: 3, FWD: 2 },
+  } satisfies Record<string, Record<Position, number>>,
+  defaultFormation: "4-4-2",
 
   /** 60s por pick. DRAFT_PICK_SECONDS só para testes locais. */
   draft: { pickSeconds: Number(process.env.DRAFT_PICK_SECONDS) || 60 },
@@ -50,6 +65,13 @@ export const game = {
       { kind: "SEMI" as const, fromRound: 11, toRound: 12 },
       { kind: "FINAL" as const, fromRound: 13, toRound: 14 },
     ],
+  },
+
+  trades: {
+    /** Última rodada em que trocas entre times podem ser concluídas (fim da temporada regular). */
+    lastRound: 10,
+    /** Máximo de jogadores de cada lado de uma proposta. */
+    maxPlayersPerSide: 4,
   },
 
   waivers: {

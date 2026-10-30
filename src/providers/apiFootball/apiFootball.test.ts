@@ -29,7 +29,7 @@ const detail = {
       players: [
         {
           player: { id: 101, name: "Atacante" },
-          statistics: [{ games: { minutes: 90, substitute: false, position: "F" }, goals: { total: 1, assists: null, saves: null }, cards: { yellow: 0, red: 0 }, penalty: { saved: null, missed: 0 } }],
+          statistics: [{ games: { minutes: 90, substitute: false, position: "F" }, goals: { total: 1, assists: null, saves: null }, shots: { total: 4, on: 2 }, passes: { total: 20, key: 1, accuracy: "15" }, tackles: { total: 1, blocks: 0, interceptions: 2 }, dribbles: { attempts: 5, success: 3, past: null }, fouls: { drawn: 2, committed: 1 }, cards: { yellow: 0, red: 0 }, penalty: { saved: null, missed: 0 } }],
         },
         {
           player: { id: 103, name: "Zagueiro" },
@@ -113,6 +113,21 @@ describe("mapper da API-Football", () => {
     expect(m?.players.find((p) => p.playerId === 101)?.position).toBe("FWD");
     expect(m?.players.find((p) => p.playerId === 103)?.position).toBeNull();
 
+    expect(m?.players.find((p) => p.playerId === 101)).toMatchObject({
+      shotsOffTarget: 2,
+      foulsSuffered: 2,
+      shotsOnTarget: 2,
+      passesCompleted: 15,
+      passesMissed: 5,
+      tackles: 1,
+      ballsRecovered: 2,
+      dribbles: 3,
+      foulsCommitted: 1,
+      shotsWoodwork: 0,
+    });
+    // Sem contagem de passes certos, nenhum passe pontua.
+    expect(m?.players.find((p) => p.playerId === 103)).toMatchObject({ passesCompleted: 0, passesMissed: 0 });
+
     const stats = deriveRawStats(m!);
     expect(stats.get(103)?.stats).toMatchObject({ ownGoals: 1, assists: 1, goalsConceded: 1 });
     expect(stats.get(200)?.stats).toMatchObject({ saves: 6, goalsConceded: 2, yellowCards: 1 });
@@ -144,6 +159,16 @@ describe("ApiFootballProvider", () => {
 
     const url = (fetchMock.mock.calls[0] as unknown as [URL])[0];
     expect(url.searchParams.get("ids")).toBe("900");
+  });
+
+  it("cacheOnly nunca chama a rede e devolve só o que está em cache", async () => {
+    const fetchMock = vi.fn(async () => ok([detail]));
+    const provider = new ApiFootballProvider({ apiKey: "k", season: 2026, leagueId: 2, minIntervalMs: 0, cache: memoryCache(), fetch: fetchMock as typeof fetch });
+    expect(await provider.getMatchDetails([900], { cacheOnly: true })).toHaveLength(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+    await provider.getMatchDetails([900]);
+    expect(await provider.getMatchDetails([900, 901], { cacheOnly: true })).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("no plano grátis (sem `ids`) busca uma partida por requisição", async () => {

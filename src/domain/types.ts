@@ -4,18 +4,40 @@ export type { Position };
 export type MatchStatus = "SCHEDULED" | "LIVE" | "FINISHED" | "POSTPONED" | "CANCELLED";
 export type Slot = "STARTER" | "BENCH";
 
-/** Estatística bruta de um jogador numa partida — tudo o que a pontuação precisa. */
-export interface RawPlayerStats {
-  minutes: number;
+/** Scouts que vêm direto da súmula do jogador (sem derivação). */
+export interface PlayerScouts {
   goals: number;
   assists: number;
-  ownGoals: number;
+  /** Chutes em direção ao gol (no alvo). */
+  shotsOnTarget: number;
+  /** Chutes na trave. */
+  shotsWoodwork: number;
+  /** Chutes para fora ou bloqueados. */
+  shotsOffTarget: number;
+  tackles: number;
+  /** Bolas recuperadas (inclui interceptações). */
+  ballsRecovered: number;
+  /** Dribles bem-sucedidos. */
+  dribbles: number;
+  passesCompleted: number;
+  passesMissed: number;
+  offsides: number;
+  foulsCommitted: number;
+  foulsSuffered: number;
+  penaltiesWon: number;
+  penaltiesConceded: number;
   yellowCards: number;
   redCards: number;
   saves: number;
-  goalsConceded: number;
   penaltiesSaved: number;
   penaltiesMissed: number;
+}
+
+/** Estatística bruta de um jogador numa partida — tudo o que a pontuação precisa. */
+export interface RawPlayerStats extends PlayerScouts {
+  minutes: number;
+  ownGoals: number;
+  goalsConceded: number;
 }
 
 /**
@@ -29,23 +51,18 @@ export interface MatchDetail {
   status: MatchStatus;
   homeGoals: number | null;
   awayGoals: number | null;
-  players: Array<{
-    playerId: number;
-    clubId: number;
-    name: string;
-    /** Posição na súmula, quando a fonte informa (usada para cadastrar jogadores novos). */
-    position?: Position | null;
-    minutes: number;
-    /** true = entrou vindo do banco. */
-    substitute: boolean;
-    goals: number;
-    assists: number;
-    yellowCards: number;
-    redCards: number;
-    saves: number;
-    penaltiesSaved: number;
-    penaltiesMissed: number;
-  }>;
+  players: Array<
+    PlayerScouts & {
+      playerId: number;
+      clubId: number;
+      name: string;
+      /** Posição na súmula, quando a fonte informa (usada para cadastrar jogadores novos). */
+      position?: Position | null;
+      minutes: number;
+      /** true = entrou vindo do banco. */
+      substitute: boolean;
+    }
+  >;
   goals: Array<{ minute: number; concedingClubId: number; ownGoalPlayerId: number | null }>;
 }
 

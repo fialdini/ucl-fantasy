@@ -1,4 +1,4 @@
-import type { MatchDetail, Position } from "@/domain/types";
+import type { MatchDetail, PlayerScouts, Position } from "@/domain/types";
 import type { ProviderClub, ProviderPlayer } from "../types";
 
 /**
@@ -20,6 +20,24 @@ const CLUBS: Array<[string, string]> = [
 const FIRST = ["Lucas", "Mateo", "Jonas", "Rafael", "Luca", "Noah", "Hugo", "Marco", "Tomás", "Kai", "Iván", "Leon", "Dani", "Enzo", "Milan", "Ola", "Pedro", "Theo", "Adam", "Bruno"];
 const LAST = ["Silva", "Müller", "García", "Rossi", "Dubois", "Jansen", "Kovač", "Novak", "Costa", "Moreau", "Schmidt", "Fernández", "Bianchi", "Peeters", "Yilmaz", "Andersen", "Santos", "Lambert", "Ricci", "Kane"];
 const SQUAD: Array<[Position, number]> = [["GK", 3], ["DEF", 8], ["MID", 8], ["FWD", 6]];
+
+const BLANK: PlayerScouts = {
+  goals: 0, assists: 0, shotsOnTarget: 0, shotsWoodwork: 0, shotsOffTarget: 0, tackles: 0, ballsRecovered: 0, dribbles: 0,
+  passesCompleted: 0, passesMissed: 0, offsides: 0, foulsCommitted: 0, foulsSuffered: 0, penaltiesWon: 0, penaltiesConceded: 0,
+  yellowCards: 0, redCards: 0, saves: 0, penaltiesSaved: 0, penaltiesMissed: 0,
+};
+
+/** Média por 90 min de cada scout de volume, por posição (passes = tentados; accuracy = % de acerto). */
+interface Volume {
+  shotsOn: number; shotsOff: number; woodwork: number; tackles: number; recoveries: number; dribbles: number;
+  passes: number; accuracy: number; fouls: number; fouled: number; offsides: number; penWon: number; penConceded: number;
+}
+const VOLUME: Record<Position, Volume> = {
+  GK: { shotsOn: 0, shotsOff: 0, woodwork: 0, tackles: 0.1, recoveries: 1.8, dribbles: 0, passes: 28, accuracy: 0.78, fouls: 0.05, fouled: 0.2, offsides: 0, penWon: 0, penConceded: 0.01 },
+  DEF: { shotsOn: 0.3, shotsOff: 0.5, woodwork: 0.03, tackles: 2.2, recoveries: 4.2, dribbles: 0.4, passes: 55, accuracy: 0.88, fouls: 1.1, fouled: 0.8, offsides: 0.05, penWon: 0.01, penConceded: 0.04 },
+  MID: { shotsOn: 0.7, shotsOff: 1.0, woodwork: 0.05, tackles: 1.8, recoveries: 3.8, dribbles: 1.2, passes: 50, accuracy: 0.86, fouls: 1.2, fouled: 1.4, offsides: 0.15, penWon: 0.03, penConceded: 0.02 },
+  FWD: { shotsOn: 1.3, shotsOff: 1.5, woodwork: 0.08, tackles: 0.6, recoveries: 1.6, dribbles: 1.5, passes: 22, accuracy: 0.75, fouls: 1.0, fouled: 1.6, offsides: 0.8, penWon: 0.06, penConceded: 0.01 },
+};
 
 export const MOCK_CLUB_BASE = 1000;
 export const clubIdAt = (index: number) => MOCK_CLUB_BASE + index + 1;
@@ -84,7 +102,10 @@ export class MockSeason {
       for (const [position, count] of SQUAD) {
         for (let i = 0; i < count; i++, n++) {
           const name = `${FIRST[Math.floor(nameRandom() * FIRST.length)]} ${LAST[Math.floor(nameRandom() * LAST.length)]}`;
-          squad.push({ id: club.id * 100 + n, name, position, clubId: club.id, photoUrl: null, injured: false });
+          // Sub-posições alternadas para o mock ter variedade (como a súmula real tem).
+          const subs = { GK: ["GK"], DEF: ["CB", "FB"], MID: ["AM", "DM"], FWD: ["ST", "WG"] } as const;
+          const subPosition = subs[position][i % subs[position].length]!;
+          squad.push({ id: club.id * 100 + n, name, position, subPosition, clubId: club.id, photoUrl: null, injured: false });
         }
       }
       this.squads.set(club.id, squad);
@@ -188,8 +209,7 @@ export class MockSeason {
         pool.slice(0, window).sort(() => random() - 0.5).slice(0, n);
       const starters = [of("GK")[random() < 0.9 ? 0 : 1]!, ...pickN(of("DEF"), 4, 6), ...pickN(of("MID"), 4, 6), ...pickN(of("FWD"), 2, 4)];
       const lines: Line[] = starters.map((p) => ({
-        playerId: p.id, clubId, name: p.name, position: p.position, minutes: 90, substitute: false, on: 0, off: 90,
-        goals: 0, assists: 0, yellowCards: 0, redCards: 0, saves: 0, penaltiesSaved: 0, penaltiesMissed: 0,
+        playerId: p.id, clubId, name: p.name, position: p.position, minutes: 90, substitute: false, on: 0, off: 90, ...BLANK,
       }));
       for (const [position, minute] of [["FWD", 60], ["MID", 70], ["DEF", 80]] as const) {
         const outgoing = lines.filter((l) => l.position === position && !l.substitute)[0]!;
@@ -198,8 +218,7 @@ export class MockSeason {
         outgoing.minutes = minute;
         outgoing.off = minute;
         lines.push({
-          playerId: incoming.id, clubId, name: incoming.name, position, minutes: 90 - minute, substitute: true, on: minute, off: 90,
-          goals: 0, assists: 0, yellowCards: 0, redCards: 0, saves: 0, penaltiesSaved: 0, penaltiesMissed: 0,
+          playerId: incoming.id, clubId, name: incoming.name, position, minutes: 90 - minute, substitute: true, on: minute, off: 90, ...BLANK,
         });
       }
       return lines;
@@ -249,6 +268,28 @@ export class MockSeason {
         if (random() < 0.12) l.yellowCards = 1;
         if (random() < 0.012) l.redCards = 1;
       }
+    }
+
+    // Scouts de volume usam outro gerador para não alterar placares e cartões já sorteados.
+    const volume = mulberry32(this.seed * 53 + matchId);
+    for (const l of [...home, ...away]) {
+      const v = VOLUME[l.position];
+      const share = l.minutes / 90;
+      const draw = (mean: number, cap: number) => poisson(volume, mean * share, cap);
+      l.shotsOnTarget = l.goals + draw(v.shotsOn, 6);
+      l.shotsOffTarget = draw(v.shotsOff, 6);
+      l.shotsWoodwork = draw(v.woodwork, 2);
+      l.tackles = draw(v.tackles, 8);
+      l.ballsRecovered = draw(v.recoveries, 12);
+      l.dribbles = draw(v.dribbles, 7);
+      const total = Math.round(v.passes * share * (0.7 + volume() * 0.6));
+      l.passesCompleted = Math.round(total * Math.min(v.accuracy + (volume() - 0.5) * 0.12, 1));
+      l.passesMissed = total - l.passesCompleted;
+      l.foulsCommitted = draw(v.fouls, 5);
+      l.foulsSuffered = draw(v.fouled, 6);
+      l.offsides = draw(v.offsides, 4);
+      l.penaltiesWon = draw(v.penWon, 1);
+      l.penaltiesConceded = draw(v.penConceded, 1);
     }
 
     const homeGoals = goals.filter((g) => g.concedingClubId === awayClubId).length;

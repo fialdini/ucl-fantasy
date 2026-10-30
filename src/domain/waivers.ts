@@ -5,7 +5,8 @@ export interface WaiverClaimInput {
   id: number;
   teamId: number;
   addPlayerId: number;
-  dropPlayerId: number;
+  /** null = sem dispensa (o elenco tem vaga). */
+  dropPlayerId: number | null;
   /** Preferência dentro do próprio time (menor = mais desejado). */
   preference: number;
 }
@@ -42,7 +43,7 @@ export interface WaiverMove {
   claimId: number;
   teamId: number;
   addPlayerId: number;
-  dropPlayerId: number;
+  dropPlayerId: number | null;
 }
 
 export function resolveWaivers(input: WaiverInput): {
@@ -86,8 +87,11 @@ export function resolveWaivers(input: WaiverInput): {
         continue;
       }
       const roster = rosters.get(claim.teamId)!;
-      roster.splice(roster.indexOf(claim.dropPlayerId), 1, claim.addPlayerId);
-      owned.delete(claim.dropPlayerId);
+      if (claim.dropPlayerId === null) roster.push(claim.addPlayerId);
+      else {
+        roster.splice(roster.indexOf(claim.dropPlayerId), 1, claim.addPlayerId);
+        owned.delete(claim.dropPlayerId);
+      }
       owned.add(claim.addPlayerId);
       outcomes.set(claim.id, { claimId: claim.id, status: "SUCCEEDED", reason: null });
       moves.push({ claimId: claim.id, teamId: claim.teamId, addPlayerId: claim.addPlayerId, dropPlayerId: claim.dropPlayerId });

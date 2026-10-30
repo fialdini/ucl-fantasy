@@ -1,103 +1,101 @@
 import { describe, expect, it } from "vitest";
-import type { ScoringConfig } from "@config/scoring";
+import { scoring, type ScoringConfig } from "@config/scoring";
 import { computePoints, deriveRawStats } from "./scoring";
-import type { MatchDetail, RawPlayerStats } from "./types";
+import type { MatchDetail, PlayerScouts, RawPlayerStats } from "./types";
 
-const zero: RawPlayerStats = {
-  minutes: 0,
+const noScouts: PlayerScouts = {
   goals: 0,
   assists: 0,
-  ownGoals: 0,
+  shotsOnTarget: 0,
+  shotsWoodwork: 0,
+  shotsOffTarget: 0,
+  tackles: 0,
+  ballsRecovered: 0,
+  dribbles: 0,
+  passesCompleted: 0,
+  passesMissed: 0,
+  offsides: 0,
+  foulsCommitted: 0,
+  foulsSuffered: 0,
+  penaltiesWon: 0,
+  penaltiesConceded: 0,
   yellowCards: 0,
   redCards: 0,
   saves: 0,
-  goalsConceded: 0,
   penaltiesSaved: 0,
   penaltiesMissed: 0,
 };
+const zero: RawPlayerStats = { ...noScouts, minutes: 0, ownGoals: 0, goalsConceded: 0 };
 const stats = (s: Partial<RawPlayerStats>): RawPlayerStats => ({ ...zero, ...s });
 
-describe("computePoints", () => {
-  it("não pontua quem não jogou", () => {
+describe("computePoints (tabela do Cartola)", () => {
+  const p = (pos: Parameters<typeof computePoints>[0], st: Partial<RawPlayerStats>) => computePoints(pos, stats({ minutes: 90, goalsConceded: 1, ...st })).points;
+
+  it("não pontua quem não jogou nem pontua tempo em campo", () => {
     expect(computePoints("FWD", zero).points).toBe(0);
     expect(computePoints("GK", zero).cleanSheet).toBe(false);
+    expect(p("FWD", {})).toBe(0);
   });
 
-  it("dá +1 para 1–59 minutos e +2 para 60+", () => {
-    expect(computePoints("FWD", stats({ minutes: 1 })).points).toBe(1);
-    expect(computePoints("FWD", stats({ minutes: 59 })).points).toBe(1);
-    expect(computePoints("FWD", stats({ minutes: 60 })).points).toBe(2);
+  it("G +8 para todas as posições e A +5", () => {
+    for (const pos of ["GK", "DEF", "MID", "FWD"] as const) expect(p(pos, { goals: 1, shotsOnTarget: 1 })).toBe(8 - (pos === "GK" ? 1 : 0));
+    expect(p("MID", { assists: 2 })).toBe(10);
   });
 
-  it("pontua gols por posição", () => {
-    const m = { minutes: 90, goalsConceded: 1 };
-    expect(computePoints("GK", stats({ ...m, goals: 1 })).points).toBe(2 + 6);
-    expect(computePoints("DEF", stats({ ...m, goals: 1 })).points).toBe(2 + 6);
-    expect(computePoints("MID", stats({ ...m, goals: 1 })).points).toBe(2 + 5);
-    expect(computePoints("FWD", stats({ ...m, goals: 2 })).points).toBe(2 + 8);
+  it("finalizações: FT +3, FD +1,2 (chute no gol que não entrou), FF +0,8", () => {
+    expect(p("FWD", { shotsWoodwork: 1 })).toBe(3);
+    expect(p("FWD", { shotsOnTarget: 3, goals: 1 })).toBe(8 + 2.4);
+    expect(p("FWD", { shotsOffTarget: 3 })).toBe(2.4);
   });
 
-  it("pontua assistências", () => {
-    expect(computePoints("FWD", stats({ minutes: 30, assists: 2 })).points).toBe(1 + 6);
+  it("FS +0,5, PS +1, I −0,1 e PP −4", () => {
+    expect(p("FWD", { foulsSuffered: 3 })).toBe(1.5);
+    expect(p("FWD", { penaltiesWon: 1 })).toBe(1);
+    expect(p("FWD", { offsides: 3 })).toBe(-0.3);
+    expect(p("FWD", { penaltiesMissed: 1 })).toBe(-4);
   });
 
-  it("clean sheet exige 60+ min e varia por posição", () => {
-    expect(computePoints("GK", stats({ minutes: 90 })).points).toBe(2 + 4);
-    expect(computePoints("DEF", stats({ minutes: 60 })).points).toBe(2 + 4);
-    expect(computePoints("MID", stats({ minutes: 90 })).points).toBe(2 + 1);
-    expect(computePoints("FWD", stats({ minutes: 90 })).points).toBe(2);
+  it("PI −0,1 por passe incompleto, exceto para o goleiro", () => {
+    expect(p("MID", { passesMissed: 7 })).toBe(-0.7);
+    expect(p("GK", { passesMissed: 7 })).toBe(-1);
+  });
+
+  it("DS +1,2; SG +5 para goleiro e defensores com 60+ min", () => {
+    expect(p("DEF", { tackles: 3 })).toBe(3.6);
+    expect(computePoints("GK", stats({ minutes: 90 })).points).toBe(5);
+    expect(computePoints("DEF", stats({ minutes: 60 })).points).toBe(5);
+    expect(computePoints("MID", stats({ minutes: 90 })).points).toBe(0);
     expect(computePoints("DEF", stats({ minutes: 59 })).cleanSheet).toBe(false);
   });
 
-  it("goleiro ganha +1 a cada 3 defesas e +5 por pênalti defendido", () => {
-    const gk = computePoints("GK", stats({ minutes: 90, goalsConceded: 1, saves: 8, penaltiesSaved: 1 }));
-    expect(gk.points).toBe(2 + 2 + 5);
-    // defesas não contam para jogadores de linha
-    expect(computePoints("DEF", stats({ minutes: 90, goalsConceded: 1, saves: 3 })).points).toBe(2);
+  it("goleiro: DE +1, DP +7, GS −1 por gol (só goleiro)", () => {
+    expect(computePoints("GK", stats({ minutes: 90, goalsConceded: 2, saves: 4, penaltiesSaved: 1 })).points).toBe(4 + 7 - 2);
+    expect(p("DEF", { saves: 3, goalsConceded: 3 })).toBe(0);
   });
 
-  it("tira −1 a cada 2 gols sofridos apenas de GOL/DEF", () => {
-    expect(computePoints("GK", stats({ minutes: 90, goalsConceded: 1 })).points).toBe(2);
-    expect(computePoints("DEF", stats({ minutes: 90, goalsConceded: 2 })).points).toBe(2 - 1);
-    expect(computePoints("DEF", stats({ minutes: 90, goalsConceded: 5 })).points).toBe(2 - 2);
-    expect(computePoints("MID", stats({ minutes: 90, goalsConceded: 4 })).points).toBe(2);
+  it("punições: FC −0,3, PC −1, CA −1, CV −3, GC −3", () => {
+    expect(p("DEF", { foulsCommitted: 3 })).toBe(-0.9);
+    expect(p("DEF", { penaltiesConceded: 1, yellowCards: 1, redCards: 1, ownGoals: 1 })).toBe(-1 - 1 - 3 - 3);
   });
 
-  it("aplica cartões, gol contra e pênalti perdido", () => {
-    expect(
-      computePoints(
-        "FWD",
-        stats({ minutes: 70, yellowCards: 1, redCards: 1, ownGoals: 1, penaltiesMissed: 1 }),
-      ).points,
-    ).toBe(2 - 1 - 3 - 2 - 2);
+  it("extras: +0,3 a cada 20 passes certos, drible +1, bola recuperada +0,5", () => {
+    expect(p("MID", { passesCompleted: 45 })).toBe(0.6);
+    expect(p("MID", { dribbles: 2, ballsRecovered: 3 })).toBe(3.5);
   });
 
-  it("detalha cada linha da pontuação", () => {
-    const r = computePoints("MID", stats({ minutes: 90, goals: 1, assists: 1, yellowCards: 1 }));
-    expect(r.breakdown.map((l) => l.points)).toEqual([2, 5, 3, 1, -1]);
-    expect(r.points).toBe(10);
+  it("soma decimais sem resíduo de ponto flutuante", () => {
+    const r = computePoints("MID", stats({ minutes: 90, goalsConceded: 1, shotsOffTarget: 1, offsides: 1, foulsCommitted: 1, passesMissed: 1 }));
+    expect(r.points).toBe(0.3);
+    expect(r.breakdown.map((l) => l.points)).toEqual([0.8, -0.1, -0.1, -0.3]);
   });
 
   it("usa a tabela passada por configuração", () => {
-    const cfg: ScoringConfig = {
-      appearance: { minMinutes: 1, fullMinutes: 45, partial: 0, full: 10 },
-      goal: { GK: 1, DEF: 1, MID: 1, FWD: 1 },
-      assist: 0,
-      cleanSheet: { minMinutes: 60, points: { GK: 0, DEF: 0, MID: 0, FWD: 0 } },
-      saves: { per: 1, points: 1 },
-      penaltySaved: 0,
-      goalsConceded: { per: 1, points: 0, positions: [] },
-      yellowCard: 0,
-      redCard: 0,
-      ownGoal: 0,
-      penaltyMissed: 0,
-    };
-    expect(computePoints("FWD", stats({ minutes: 50, goals: 3 }), cfg).points).toBe(13);
+    const cfg: ScoringConfig = { ...scoring, goal: { GK: 1, DEF: 1, MID: 1, FWD: 1 }, appearance: { minMinutes: 1, fullMinutes: 45, partial: 0, full: 10 } };
+    expect(computePoints("FWD", stats({ minutes: 50, goals: 3, goalsConceded: 1 }), cfg).points).toBe(13);
   });
 });
 
 describe("deriveRawStats", () => {
-  const base = { goals: 0, assists: 0, yellowCards: 0, redCards: 0, saves: 0, penaltiesSaved: 0, penaltiesMissed: 0 };
   const detail: MatchDetail = {
     matchId: 1,
     homeClubId: 10,
@@ -106,11 +104,11 @@ describe("deriveRawStats", () => {
     homeGoals: 1,
     awayGoals: 2,
     players: [
-      { ...base, playerId: 1, clubId: 10, name: "GK casa", minutes: 90, substitute: false, saves: 4 },
-      { ...base, playerId: 2, clubId: 10, name: "DEF substituído", minutes: 55, substitute: false },
-      { ...base, playerId: 3, clubId: 10, name: "DEF que entrou", minutes: 35, substitute: true },
-      { ...base, playerId: 4, clubId: 20, name: "ATA fora", minutes: 90, substitute: false, goals: 1 },
-      { ...base, playerId: 5, clubId: 10, name: "Banco não usado", minutes: 0, substitute: false },
+      { ...noScouts, playerId: 1, clubId: 10, name: "GK casa", minutes: 90, substitute: false, saves: 4 },
+      { ...noScouts, playerId: 2, clubId: 10, name: "DEF substituído", minutes: 55, substitute: false, tackles: 3 },
+      { ...noScouts, playerId: 3, clubId: 10, name: "DEF que entrou", minutes: 35, substitute: true },
+      { ...noScouts, playerId: 4, clubId: 20, name: "ATA fora", minutes: 90, substitute: false, goals: 1 },
+      { ...noScouts, playerId: 5, clubId: 10, name: "Banco não usado", minutes: 0, substitute: false },
     ],
     goals: [
       { minute: 20, concedingClubId: 10, ownGoalPlayerId: null },
@@ -130,6 +128,11 @@ describe("deriveRawStats", () => {
   it("atribui gols contra a quem os marcou", () => {
     expect(derived.get(3)?.stats.ownGoals).toBe(1);
     expect(derived.get(2)?.stats.ownGoals).toBe(0);
+  });
+
+  it("repassa os scouts da súmula", () => {
+    expect(derived.get(2)?.stats.tackles).toBe(3);
+    expect(derived.get(1)?.stats).not.toHaveProperty("name");
   });
 
   it("gols nos acréscimos entram no fim da partida", () => {

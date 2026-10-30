@@ -119,7 +119,7 @@ export class ApiFootballProvider implements FootballDataProvider {
     return mapFixtures(await this.cached(`apif:fixtures:${league}:${season}`, "/fixtures", this.scope, 30 * 60_000));
   }
 
-  async getMatchDetails(matchIds: readonly number[], options: { fresh?: boolean } = {}): Promise<MatchDetail[]> {
+  async getMatchDetails(matchIds: readonly number[], options: { fresh?: boolean; cacheOnly?: boolean } = {}): Promise<MatchDetail[]> {
     const details: MatchDetail[] = [];
     const missing: number[] = [];
     for (const id of matchIds) {
@@ -127,6 +127,7 @@ export class ApiFootballProvider implements FootballDataProvider {
       if (hit) details.push(...mapMatchDetails([hit.response]));
       else missing.push(id);
     }
+    if (options.cacheOnly) return details;
     const perRequest = this.options.batchIds === false ? 1 : IDS_PER_REQUEST;
     for (let i = 0; i < missing.length; i += perRequest) {
       const batch = missing.slice(i, i + perRequest);

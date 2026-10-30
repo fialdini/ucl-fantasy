@@ -4,7 +4,8 @@ import { game } from "@config/game";
 import { getDb, type Db } from "@/db/client";
 import { clubs, draftPicks, leagueMembers, leagues, players } from "@/db/schema";
 import { snakeOrder } from "@/domain/draft";
-import { POSITIONS, positionQuota } from "@/domain/roster";
+import { POSITIONS, positionMax } from "@/domain/roster";
+import { subOrDefault, type SubPosition } from "@/domain/subpositions";
 import type { Position } from "@/domain/types";
 import { GameError } from "@/server/errors";
 import { advanceDraft, makePick, teamOf } from "@/server/leagues";
@@ -24,8 +25,8 @@ export interface DraftState {
   teams: Array<{ id: number; name: string; owner: string }>;
   order: number[];
   picks: Array<{ overall: number; round: number; teamId: number; name: string; position: Position; club: string; auto: boolean }>;
-  myRoster: Array<{ position: Position; clubId: number }>;
-  available: Array<{ playerId: number; name: string; position: Position; club: string; clubId: number; total: number; avg: number }>;
+  myRoster: Array<{ position: Position; subPosition: SubPosition; clubId: number }>;
+  available: Array<{ playerId: number; name: string; position: Position; subPosition: SubPosition; photoUrl: string | null; club: string; clubId: number; total: number; avg: number }>;
   clubCap: number;
   quotas: Record<Position, number>;
 }
@@ -82,12 +83,12 @@ async function draftState(db: Db, leagueId: number, userId: number, url: URL): P
     teams: teams.map((t) => ({ id: t.id, name: t.name, owner: t.owner })),
     order,
     picks,
-    myRoster: myTeam ? (await rosterView(db, myTeam.id)).map((p) => ({ position: p.position, clubId: p.clubId })) : [],
+    myRoster: myTeam ? (await rosterView(db, myTeam.id)).map((p) => ({ position: p.position, subPosition: subOrDefault(p.position, p.subPosition), clubId: p.clubId })) : [],
     available: available
       .filter((p) => p.eliminated === null)
-      .map((p) => ({ playerId: p.playerId, name: p.name, position: p.position, club: p.club, clubId: p.clubId, total: p.total, avg: p.avg })),
+      .map((p) => ({ playerId: p.playerId, name: p.name, position: p.position, subPosition: subOrDefault(p.position, p.subPosition), photoUrl: p.photoUrl, club: p.club, clubId: p.clubId, total: p.total, avg: p.avg })),
     clubCap: game.roster.clubCap(league!.startRound),
-    quotas: Object.fromEntries(POSITIONS.map((p) => [p, positionQuota(p)])) as Record<Position, number>,
+    quotas: Object.fromEntries(POSITIONS.map((p) => [p, positionMax(p)])) as Record<Position, number>,
   };
 }
 
