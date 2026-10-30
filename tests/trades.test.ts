@@ -55,12 +55,24 @@ describe("trocas entre times", () => {
 
   it("com os dois elencos cheios, 2 por 1 é recusado; depois de uma dispensa, passa", async () => {
     const [a, b] = [teamIds[0]!, teamIds[1]!];
-    const give = [(await ofPosition(a, "MID"))[0]!];
-    const get = (await ofPosition(b, "MID")).slice(0, 2);
+    // A composição do draft automático varia (a temporada simulada usa Math.exp, cujo resultado muda entre
+    // versões do V8): troca na posição em que A ainda cabe mais um e B tem dois para dar.
+    const positions = ["MID", "DEF", "FWD"] as const;
+    let position: (typeof positions)[number] | undefined;
+    for (const p of positions) {
+      if ((await ofPosition(a, p)).length < game.roster.maxPerPosition[p] && (await ofPosition(b, p)).length >= 2) {
+        position = p;
+        break;
+      }
+    }
+    if (!position) throw new Error("draft sem posição compatível para a troca 2 por 1");
+    const give = [(await ofPosition(a, position))[0]!];
+    const get = (await ofPosition(b, position)).slice(0, 2);
     const input = { leagueId, userId: userIds[0]!, receiverTeamId: b, givePlayerIds: give, getPlayerIds: get };
     await expect(proposeTrade(db, input, T0)).rejects.toThrow(new RegExp(`T0: o elenco ficaria com ${game.roster.size + 1}`));
 
-    await dropPlayer(db, leagueId, userIds[0]!, (await ofPosition(a, "FWD"))[0]!, T0);
+    const other = positions.find((p) => p !== position)!;
+    await dropPlayer(db, leagueId, userIds[0]!, (await ofPosition(a, other))[0]!, T0);
     const trade = await proposeTrade(db, input, T0);
     await acceptTrade(db, leagueId, userIds[1]!, trade.id, T0);
 
@@ -79,8 +91,17 @@ describe("trocas entre times", () => {
     const b = teamIds[1]!;
     const owned = new Set((await db.select().from(rosterSlots).where(eq(rosterSlots.leagueId, leagueId))).map((r) => r.playerId));
     const counts = new Map<number, number>();
-    for (const p of await roster(b)) counts.set(p.clubId, (counts.get(p.clubId) ?? 0) + 1);
-    const free = (await rankedAvailable(db, leagueId)).find((p) => !owned.has(p.playerId) && p.position === "MID" && (counts.get(p.clubId) ?? 0) < 3)!;
+    const byPosition = new Map<string, number>();
+    for (const p of await roster(b)) {
+      counts.set(p.clubId, (counts.get(p.clubId) ?? 0) + 1);
+      byPosition.set(p.position, (byPosition.get(p.position) ?? 0) + 1);
+    }
+    const free = (await rankedAvailable(db, leagueId)).find(
+      (p) =>
+        !owned.has(p.playerId) &&
+        (byPosition.get(p.position) ?? 0) < game.roster.maxPerPosition[p.position] &&
+        (counts.get(p.clubId) ?? 0) < 3,
+    )!;
     await addFreeAgent(db, leagueId, userIds[1]!, free.playerId, null, T0);
     expect(await roster(b)).toHaveLength(game.roster.size);
     const other = (await rankedAvailable(db, leagueId)).find((p) => !owned.has(p.playerId) && p.playerId !== free.playerId)!;
