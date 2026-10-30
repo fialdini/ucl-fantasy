@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { deriveRawStats } from "@/domain/scoring";
 import type { ResponseCache } from "../types";
-import { lineupPlayers, mapFixtures, mapGoals, mapMatchDetail, matchSchema, roundOrderOf } from "./mapper";
+import { lineupPlayers, mapFixtures, mapGoals, mapMatchDetail, matchSchema, roundOrderOf, slimLineups, slimPlayerStats } from "./mapper";
 import { UefaProvider } from "./provider";
 
 // Formatos reais de match.uefa.com / matchstats.uefa.com (campos irrelevantes omitidos).
@@ -145,5 +145,45 @@ describe("UefaProvider", () => {
     const provider = new UefaProvider({ seasonYear: 2027, competitionId: 1, minIntervalMs: 0, cache: memoryCache().cache, fetch: fetchMock as unknown as typeof fetch });
     expect(await provider.getMatchDetails([900])).toEqual([]);
     expect(await provider.getLeagueStageRanks()).toEqual(new Map());
+  });
+});
+
+describe("cache enxuto da UEFA", () => {
+  it("guarda só o que o mapper lê e pontua igual à resposta bruta", () => {
+    const tr = (en: string) => ({ name: { EN: en, FR: `${en} (fr)`, AR: "…" } });
+    const rawLineups = {
+      ...lineups,
+      homeTeam: { ...lineups.homeTeam, coaches: [{ role: "COACH", person: { id: "9", translations: tr("Técnico") } }], team: { id: "10", translations: tr("Casa") } },
+    };
+    const rawStats = stats.map((p) => ({
+      ...p,
+      teamId: "10",
+      statistics: [
+        ...p.statistics.map((s) => ({ ...s, translations: tr(s.name) })),
+        { name: "distance_covered", value: "10.5", translations: tr("Distance") },
+        { name: "red_cards", value: "0", translations: tr("Red") },
+      ],
+    }));
+    const slimL = slimLineups(rawLineups);
+    const slimS = slimPlayerStats(rawStats);
+    expect(mapMatchDetail(matchSchema.parse(match()), slimL, slimS)).toEqual(mapMatchDetail(matchSchema.parse(match()), rawLineups, rawStats));
+    expect(slimL.homeTeam?.coaches[0]?.person.translations?.name).toEqual({ EN: "Técnico" });
+    const names = slimS.flatMap((p) => p.statistics.map((s) => s.name));
+    expect(names).not.toContain("distance_covered");
+    expect(names).not.toContain("red_cards");
+    // Reprocessar o que veio do cache (já enxuto) não muda nada.
+    expect(slimPlayerStats(slimS)).toEqual(slimS);
+  });
+
+  it("grava com chave versionada e devolve a versão enxuta", async () => {
+    const store = new Map<string, unknown>();
+    const cache: ResponseCache = { get: async () => null, set: async (key, _endpoint, response) => void store.set(key, response) };
+    const fetchMock = vi.fn(async (url: URL) => {
+      const body = url.pathname.startsWith("/v5/matches/900/lineups") ? lineups : url.pathname.startsWith("/v1/player-statistics") ? stats : url.pathname === "/v5/matches" ? [match()] : null;
+      return new Response(JSON.stringify(body), { status: body ? 200 : 404 });
+    });
+    const provider = new UefaProvider({ seasonYear: 2027, competitionId: 1, minIntervalMs: 0, cache, fetch: fetchMock as unknown as typeof fetch });
+    await provider.getMatchDetails([900]);
+    expect([...store.keys()].every((k) => k.startsWith(provider.cacheKeyPrefix))).toBe(true);
   });
 });

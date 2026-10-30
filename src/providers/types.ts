@@ -59,6 +59,8 @@ export interface ProviderFixture {
  */
 export interface FootballDataProvider {
   readonly name: string;
+  /** Prefixo das chaves atuais no cache: entradas desta fonte fora dele são de versões antigas e são apagadas. */
+  readonly cacheKeyPrefix?: string;
   getClubs(): Promise<ProviderClub[]>;
   getSquad(clubId: number): Promise<ProviderPlayer[]>;
   getFixtures(): Promise<ProviderFixture[]>;

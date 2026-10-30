@@ -12,9 +12,15 @@ import {
   mapMatchDetail,
   matchesSchema,
   roundOrderOf,
+  slimLineups,
+  slimMatches,
+  slimPlayerStats,
+  slimStandings,
   type UefaMatch,
 } from "./mapper";
 
+/** Entra na chave do cache: suba ao mudar o que as versões enxutas (`slim*`) guardam. */
+const UEFA_CACHE_VERSION = 2;
 const MATCH_API = "https://match.uefa.com";
 const STATS_API = "https://matchstats.uefa.com";
 const STANDINGS_API = "https://standings.uefa.com";
@@ -61,6 +67,7 @@ function nextSlot(minIntervalMs: number): Promise<void> {
  */
 export class UefaProvider implements FootballDataProvider {
   readonly name = "uefa";
+  readonly cacheKeyPrefix = `uefa:v${UEFA_CACHE_VERSION}:`;
   private requests = 0;
   private squads: Promise<{ byClub: Map<number, ProviderPlayer[]>; coaches: ProviderCoach[] }> | null = null;
 
@@ -80,14 +87,23 @@ export class UefaProvider implements FootballDataProvider {
     return res.json();
   }
 
-  private async cached(key: string, url: URL, maxAgeMs: number, options: { fresh?: boolean; cacheOnly?: boolean; keep?: (r: unknown) => boolean } = {}) {
+  /** `slim` reduz a resposta ao que o mapper lê antes de guardar (e devolve a mesma versão enxuta). */
+  private async cached(
+    rawKey: string,
+    url: URL,
+    maxAgeMs: number,
+    options: { fresh?: boolean; cacheOnly?: boolean; keep?: (r: unknown) => boolean; slim: (r: unknown) => unknown },
+  ) {
+    const key = this.cacheKeyPrefix + rawKey.replace(/^uefa:/, "");
     if (!options.fresh) {
       const hit = await this.options.cache.get(key);
       if (hit && (options.cacheOnly || Date.now() - hit.fetchedAt.getTime() < maxAgeMs)) return hit.response;
       if (options.cacheOnly) return null;
     }
-    const response = await this.request(url);
-    if (response !== null && (options.keep?.(response) ?? true)) await this.options.cache.set(key, url.pathname, response);
+    const raw = await this.request(url);
+    if (raw === null) return null;
+    const response = options.slim(raw);
+    if (options.keep?.(response) ?? true) await this.options.cache.set(key, url.pathname, response);
     return response;
   }
 
@@ -106,6 +122,7 @@ export class UefaProvider implements FootballDataProvider {
         `uefa:matches:${competitionId}:${seasonYear}:${offset}`,
         this.url(MATCH_API, "/v5/matches", { competitionId, seasonYear, order: "ASC", offset, limit: PAGE }),
         this.options.immutable ? Infinity : 30 * 60_000,
+        { slim: slimMatches },
       );
       const items = Array.isArray(page) ? page : [];
       all.push(...items);
@@ -124,12 +141,13 @@ export class UefaProvider implements FootballDataProvider {
 
   private async lineups(matchId: number, finished: boolean, options: { fresh?: boolean; cacheOnly?: boolean } = {}) {
     // Partida encerrada: a súmula não muda mais.
-    return this.cached(`uefa:lineups:${matchId}`, this.url(MATCH_API, `/v5/matches/${matchId}/lineups`), finished ? Infinity : HOUR, options);
+    return this.cached(`uefa:lineups:${matchId}`, this.url(MATCH_API, `/v5/matches/${matchId}/lineups`), finished ? Infinity : HOUR, { ...options, slim: slimLineups });
   }
 
   private async playerStats(matchId: number, options: { fresh?: boolean; cacheOnly?: boolean } = {}) {
     return this.cached(`uefa:pstats:${matchId}`, this.url(STATS_API, `/v1/player-statistics/${matchId}`), Infinity, {
       ...options,
+      slim: slimPlayerStats,
       // Resposta vazia = estatística ainda não publicada: não guarda, tenta de novo depois.
       keep: (r) => Array.isArray(r) && r.length > 0,
     });
@@ -170,7 +188,9 @@ export class UefaProvider implements FootballDataProvider {
   async getMatchdaySquads(matchIds: readonly number[]): Promise<MatchdaySquad[]> {
     const squads: MatchdaySquad[] = [];
     for (const id of matchIds) {
-      const raw = await this.cached(`uefa:lineups-pre:${id}`, this.url(MATCH_API, `/v5/matches/${id}/lineups`), 10 * 60_000);
+      const raw = await this.cached(`uefa:lineups-pre:${id}`, this.url(MATCH_API, `/v5/matches/${id}/lineups`), 10 * 60_000, {
+        slim: slimLineups,
+      });
       const squad = raw ? lineupMatchdaySquad(id, raw) : null;
       if (squad) squads.push(squad);
     }
@@ -220,6 +240,7 @@ export class UefaProvider implements FootballDataProvider {
       `uefa:standings:${competitionId}:${seasonYear}`,
       this.url(STANDINGS_API, "/v1/standings", { competitionId, seasonYear }),
       6 * HOUR,
+      { slim: slimStandings },
     );
     // Antes do fim da fase de liga a classificação é parcial: só vale com as 8 rodadas jogadas.
     const leaguePhase = (await this.rawMatches()).filter((m) => {

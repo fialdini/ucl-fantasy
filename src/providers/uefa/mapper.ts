@@ -85,6 +85,48 @@ export const standingsSchema = z.array(
   z.object({ items: z.array(z.object({ rank: z.number(), team: z.object({ id }) })) }),
 );
 
+/** Estatísticas da UEFA lidas por `mapMatchDetail`. Ao incluir outra, suba UEFA_CACHE_VERSION no provider. */
+export const USED_STAT_NAMES = new Set([
+  "minutes_played_official",
+  "goals",
+  "assists",
+  "attempts_on_target",
+  "woodwork",
+  "attempts_off_target",
+  "attempts_blocked",
+  "tackles_won",
+  "recovered_ball",
+  "dribbling_successful",
+  "passes_attempted",
+  "passes_completed",
+  "offsides",
+  "fouls_committed",
+  "fouls_suffered",
+  "penalty_awarded",
+  "penalty_conceded",
+  "yellow_cards",
+  "red_cards",
+  "saves",
+  "saves_on_penalty",
+  "penalty_miss",
+]);
+
+/**
+ * Versões enxutas das respostas para o cache do banco: só os campos que as schemas leem (o Zod
+ * descarta o resto, inclusive traduções em 9 idiomas) e, nas estatísticas, só as usadas e diferentes
+ * de zero (ausente vale 0). Uma súmula cai de ~90 KB para ~15 KB e as estatísticas de uma partida de ~5 MB
+ * para poucos KB, o que mantém o banco dentro do plano grátis do Neon (512 MB).
+ */
+export const slimMatches = (raw: unknown) => matchesSchema.parse(raw);
+export const slimLineups = (raw: unknown) => lineupsSchema.parse(raw);
+export const slimStandings = (raw: unknown) => standingsSchema.parse(raw);
+export function slimPlayerStats(raw: unknown) {
+  return playerStatsSchema.parse(raw).map((p) => ({
+    playerId: p.playerId,
+    statistics: p.statistics.filter((s) => USED_STAT_NAMES.has(s.name) && (Number(s.value) || 0) !== 0),
+  }));
+}
+
 const POSITIONS: Record<string, Position> = { GOALKEEPER: "GK", DEFENDER: "DEF", MIDFIELDER: "MID", FORWARD: "FWD" };
 
 export function mapStatus(status: string): MatchStatus {
@@ -261,6 +303,7 @@ export function mapMatchDetail(match: UefaMatch, rawLineups: unknown, rawStats: 
           const s = stats.get(player.id);
           // Relacionado sem linha de estatística (ex.: membro da comissão listado no banco) fica de fora.
           if (!s) continue;
+          // Ausente = 0: o cache guarda só as estatísticas de USED_STAT_NAMES diferentes de zero.
           const v = (name: string) => s.get(name) ?? 0;
           const attempted = v("passes_attempted");
           const completed = Math.min(v("passes_completed"), attempted);

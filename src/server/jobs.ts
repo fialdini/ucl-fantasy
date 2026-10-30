@@ -2,6 +2,7 @@ import { and, asc, desc, eq, inArray, isNull, lte, ne, notInArray, sql } from "d
 import { competitionRounds, game } from "@config/game";
 import type { Db, DbOrTx } from "@/db/client";
 import {
+  apiCache,
   clubs,
   coaches,
   fantasyTeams,
@@ -640,6 +641,13 @@ export function runScheduledJobs(ctx: JobContext, options: { forceCalendar?: boo
 async function runScheduledJobsNow(ctx: JobContext, options: { forceCalendar?: boolean }) {
   const { db, now } = ctx;
   const results: Record<string, { ok: boolean; message: string }> = {};
+  const { cacheKeyPrefix } = ctx.provider;
+  if (cacheKeyPrefix) {
+    // Respostas guardadas por versões anteriores do provider (formato antigo): só ocupam espaço.
+    await db
+      .delete(apiCache)
+      .where(and(eq(apiCache.provider, ctx.provider.name), sql`not starts_with(${apiCache.key}, ${cacheKeyPrefix})`));
+  }
   const allRounds = await db.select().from(rounds);
   const lastCalendar = await lastSuccess(db, "calendar");
   const awaitingResult = await db
