@@ -643,10 +643,15 @@ async function runScheduledJobsNow(ctx: JobContext, options: { forceCalendar?: b
   const results: Record<string, { ok: boolean; message: string }> = {};
   const { cacheKeyPrefix } = ctx.provider;
   if (cacheKeyPrefix) {
-    // Respostas guardadas por versões anteriores do provider (formato antigo): só ocupam espaço.
-    await db
-      .delete(apiCache)
-      .where(and(eq(apiCache.provider, ctx.provider.name), sql`not starts_with(${apiCache.key}, ${cacheKeyPrefix})`));
+    // Respostas de versões anteriores do provider (formato antigo) só ocupam espaço. O cache é descartável
+    // (tudo é buscado de novo), então TRUNCATE: devolve o disco na hora, o que um DELETE não faz. Isso
+    // importa no plano grátis do Neon, que trava escritas ao passar de 512 MB.
+    const [stale] = await db
+      .select({ key: apiCache.key })
+      .from(apiCache)
+      .where(and(eq(apiCache.provider, ctx.provider.name), sql`not starts_with(${apiCache.key}, ${cacheKeyPrefix})`))
+      .limit(1);
+    if (stale) await db.execute(sql`truncate table ${apiCache}`);
   }
   const allRounds = await db.select().from(rounds);
   const lastCalendar = await lastSuccess(db, "calendar");
