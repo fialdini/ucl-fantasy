@@ -1,0 +1,222 @@
+import { describe, expect, it, vi } from "vitest";
+import { deriveRawStats } from "@/domain/scoring";
+import type { ResponseCache } from "../types";
+import { mapFixtures, mapMatchDetails, mapRound, mapSquad, mapStatus } from "./mapper";
+import { ApiFootballProvider } from "./provider";
+
+const fixture = (id: number, round: string, date: string, home: number, away: number, status = "FT") => ({
+  fixture: { id, date, status: { short: status } },
+  league: { round },
+  teams: { home: { id: home }, away: { id: away } },
+  goals: { home: 1, away: 0 },
+  score: { penalty: { home: null, away: null } },
+});
+
+// Formato documentado de GET /fixtures?ids=... (com events e players).
+const detail = {
+  ...fixture(900, "League Stage - 3", "2026-10-21T19:00:00+00:00", 10, 20),
+  goals: { home: 2, away: 1 },
+  events: [
+    { time: { elapsed: 12, extra: null }, team: { id: 10 }, player: { id: 101 }, type: "Goal", detail: "Normal Goal" },
+    { time: { elapsed: 40, extra: null }, team: { id: 10 }, player: { id: 102 }, type: "Goal", detail: "Penalty" },
+    { time: { elapsed: 55, extra: null }, team: { id: 20 }, player: { id: 201 }, type: "Goal", detail: "Missed Penalty" },
+    { time: { elapsed: 90, extra: 4 }, team: { id: 10 }, player: { id: 103 }, type: "Goal", detail: "Own Goal" },
+    { time: { elapsed: 60, extra: null }, team: { id: 10 }, player: { id: 104 }, type: "Card", detail: "Yellow Card" },
+  ],
+  players: [
+    {
+      team: { id: 10 },
+      players: [
+        {
+          player: { id: 101, name: "Atacante" },
+          statistics: [{ games: { minutes: 90, substitute: false, position: "F" }, goals: { total: 1, assists: null, saves: null }, shots: { total: 4, on: 2 }, passes: { total: 20, key: 1, accuracy: "15" }, tackles: { total: 1, blocks: 0, interceptions: 2 }, dribbles: { attempts: 5, success: 3, past: null }, fouls: { drawn: 2, committed: 1 }, cards: { yellow: 0, red: 0 }, penalty: { saved: null, missed: 0 } }],
+        },
+        {
+          player: { id: 103, name: "Zagueiro" },
+          statistics: [{ games: { minutes: 90, substitute: false }, goals: { total: null, assists: 1, saves: null }, cards: { yellow: 0, red: 0 }, penalty: {} }],
+        },
+        {
+          player: { id: 105, name: "Reserva não usado" },
+          statistics: [{ games: { minutes: null, substitute: true }, goals: {}, cards: {}, penalty: {} }],
+        },
+      ],
+    },
+    {
+      team: { id: 20 },
+      players: [
+        {
+          player: { id: 200, name: "Goleiro" },
+          statistics: [{ games: { minutes: 90, substitute: false }, goals: { total: 0, assists: 0, saves: 6 }, cards: { yellow: 1, red: 0 }, penalty: { saved: 0, missed: 0 } }],
+        },
+        {
+          player: { id: 201, name: "Batedor" },
+          statistics: [{ games: { minutes: 30, substitute: true }, goals: { total: 0 }, cards: {}, penalty: { missed: 1 } }],
+        },
+      ],
+    },
+  ],
+};
+
+describe("mapper da API-Football", () => {
+  it("mapeia nomes de rodada e ignora qualificatórias", () => {
+    expect(mapRound("League Stage - 8")).toEqual({ stage: "LEAGUE", leagueRound: 8 });
+    expect(mapRound("Knockout Round Play-offs")).toEqual({ stage: "PLAYOFF" });
+    expect(mapRound("Play-offs")).toBeNull();
+    expect(mapRound("3rd Qualifying Round")).toBeNull();
+    expect(mapRound("Final")).toEqual({ stage: "FINAL" });
+  });
+
+  it("mapeia status", () => {
+    expect(mapStatus("NS")).toBe("SCHEDULED");
+    expect(mapStatus("2H")).toBe("LIVE");
+    expect(mapStatus("PEN")).toBe("FINISHED");
+    expect(mapStatus("PST")).toBe("POSTPONED");
+    expect(mapStatus("ABD")).toBe("CANCELLED");
+  });
+
+  it("separa ida e volta pela data dentro do confronto", () => {
+    const fixtures = mapFixtures([
+      fixture(2, "Round of 16", "2027-03-11T20:00:00Z", 5, 6),
+      fixture(1, "Round of 16", "2027-03-04T20:00:00Z", 6, 5),
+      fixture(3, "League Stage - 2", "2026-09-30T19:00:00Z", 5, 7),
+      fixture(4, "Final", "2027-05-29T19:00:00Z", 5, 8),
+      fixture(5, "Play-offs", "2026-08-20T19:00:00Z", 5, 9),
+    ]);
+    const byId = new Map(fixtures.map((f) => [f.id, f.roundOrder]));
+    expect(byId).toEqual(
+      new Map([
+        [3, 2],
+        [4, 17],
+        [1, 11],
+        [2, 12],
+      ]),
+    );
+  });
+
+  it("descarta jogadores sem posição", () => {
+    const squad = mapSquad(
+      [{ team: { id: 10 }, players: [{ id: 1, name: "A", position: "Attacker" }, { id: 2, name: "B", position: null }] }],
+      10,
+    );
+    expect(squad).toEqual([{ id: 1, name: "A", position: "FWD", clubId: 10, photoUrl: null, injured: false }]);
+  });
+
+  it("normaliza o detalhe da partida e a linha do tempo de gols", () => {
+    const [m] = mapMatchDetails([detail]);
+    expect(m?.goals).toEqual([
+      { minute: 12, concedingClubId: 20, ownGoalPlayerId: null },
+      { minute: 40, concedingClubId: 20, ownGoalPlayerId: null },
+      { minute: 94, concedingClubId: 10, ownGoalPlayerId: 103 },
+    ]);
+    expect(m?.players.find((p) => p.playerId === 105)?.minutes).toBe(0);
+    expect(m?.players.find((p) => p.playerId === 201)?.penaltiesMissed).toBe(1);
+    expect(m?.players.find((p) => p.playerId === 101)?.position).toBe("FWD");
+    expect(m?.players.find((p) => p.playerId === 103)?.position).toBeNull();
+
+    expect(m?.players.find((p) => p.playerId === 101)).toMatchObject({
+      shotsOffTarget: 2,
+      foulsSuffered: 2,
+      shotsOnTarget: 2,
+      passesCompleted: 15,
+      passesMissed: 5,
+      tackles: 1,
+      ballsRecovered: 2,
+      dribbles: 3,
+      foulsCommitted: 1,
+      shotsWoodwork: 0,
+    });
+    // Sem contagem de passes certos, nenhum passe pontua.
+    expect(m?.players.find((p) => p.playerId === 103)).toMatchObject({ passesCompleted: 0, passesMissed: 0 });
+
+    const stats = deriveRawStats(m!);
+    expect(stats.get(103)?.stats).toMatchObject({ ownGoals: 1, assists: 1, goalsConceded: 1 });
+    expect(stats.get(200)?.stats).toMatchObject({ saves: 6, goalsConceded: 2, yellowCards: 1 });
+  });
+});
+
+describe("ApiFootballProvider", () => {
+  function memoryCache(): ResponseCache {
+    const store = new Map<string, { response: unknown; fetchedAt: Date }>();
+    return {
+      get: async (key) => store.get(key) ?? null,
+      set: async (key, _endpoint, response) => void store.set(key, { response, fetchedAt: new Date() }),
+    };
+  }
+  const ok = (response: unknown) => new Response(JSON.stringify({ errors: [], response }), { status: 200 });
+
+  it("usa o cache e só busca partidas que faltam, em lotes de até 20", async () => {
+    const fetchMock = vi.fn(async () => ok([detail]));
+    const cache = memoryCache();
+    const provider = new ApiFootballProvider({ apiKey: "k", season: 2026, leagueId: 2, minIntervalMs: 0, cache, fetch: fetchMock as typeof fetch });
+
+    expect(await provider.getMatchDetails([900])).toHaveLength(1);
+    expect(await provider.getMatchDetails([900])).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(provider.requestCount()).toBe(1);
+
+    await provider.getMatchDetails([900], { fresh: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const url = (fetchMock.mock.calls[0] as unknown as [URL])[0];
+    expect(url.searchParams.get("ids")).toBe("900");
+  });
+
+  it("cacheOnly nunca chama a rede e devolve só o que está em cache", async () => {
+    const fetchMock = vi.fn(async () => ok([detail]));
+    const provider = new ApiFootballProvider({ apiKey: "k", season: 2026, leagueId: 2, minIntervalMs: 0, cache: memoryCache(), fetch: fetchMock as typeof fetch });
+    expect(await provider.getMatchDetails([900], { cacheOnly: true })).toHaveLength(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+    await provider.getMatchDetails([900]);
+    expect(await provider.getMatchDetails([900, 901], { cacheOnly: true })).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("no plano grátis (sem `ids`) busca uma partida por requisição", async () => {
+    const fetchMock = vi.fn(async (url: URL) => ok([{ ...detail, fixture: { ...detail.fixture, id: Number(url.searchParams.get("id")) } }]));
+    const provider = new ApiFootballProvider({ apiKey: "k", season: 2024, leagueId: 2, minIntervalMs: 0, batchIds: false, cache: memoryCache(), fetch: fetchMock as unknown as typeof fetch });
+    const details = await provider.getMatchDetails([900, 901]);
+    expect(details.map((d) => d.matchId)).toEqual([900, 901]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect((fetchMock.mock.calls[0] as unknown as [URL])[0].searchParams.has("ids")).toBe(false);
+  });
+
+  it("espera e tenta de novo quando bate o limite por minuto (429)", async () => {
+    let calls = 0;
+    const fetchMock = vi.fn(async () => (++calls === 1 ? new Response("", { status: 429 }) : ok([detail])));
+    const provider = new ApiFootballProvider({ apiKey: "k", season: 2024, leagueId: 2, minIntervalMs: 0, batchIds: false, retryDelayMs: 0, cache: memoryCache(), fetch: fetchMock as unknown as typeof fetch });
+    expect(await provider.getMatchDetails([900])).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("ritmo é compartilhado entre instâncias (limite é da conta)", async () => {
+    const times: number[] = [];
+    const fetchMock = vi.fn(async () => {
+      times.push(Date.now());
+      return ok([]);
+    });
+    const make = () => new ApiFootballProvider({ apiKey: "k", season: 2024, leagueId: 2, minIntervalMs: 120, cache: memoryCache(), fetch: fetchMock as typeof fetch });
+    await Promise.all([make().getFixtures(), make().getClubs(), make().getLeagueStageRanks()]);
+    times.sort((a, b) => a - b);
+    expect(times[1]! - times[0]!).toBeGreaterThanOrEqual(110);
+    expect(times[2]! - times[1]!).toBeGreaterThanOrEqual(110);
+  });
+
+  it("temporada encerrada: cache nunca expira", async () => {
+    const fetchMock = vi.fn(async () => ok([]));
+    const store = new Map<string, { response: unknown; fetchedAt: Date }>([
+      ["apif:fixtures:2:2024", { response: [], fetchedAt: new Date("2020-01-01") }],
+    ]);
+    const cache: ResponseCache = { get: async (k) => store.get(k) ?? null, set: async () => {} };
+    const provider = new ApiFootballProvider({ apiKey: "k", season: 2024, leagueId: 2, minIntervalMs: 0, immutable: true, cache, fetch: fetchMock as typeof fetch });
+    await provider.getFixtures();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("falha explicitamente quando a API devolve erro (ex.: temporada fora do plano)", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ errors: { plan: "Free plans do not have access to this season" }, response: [] })),
+    );
+    const provider = new ApiFootballProvider({ apiKey: "k", season: 2026, leagueId: 2, minIntervalMs: 0, cache: memoryCache(), fetch: fetchMock as typeof fetch });
+    await expect(provider.getFixtures()).rejects.toThrow(/do not have access/);
+  });
+});

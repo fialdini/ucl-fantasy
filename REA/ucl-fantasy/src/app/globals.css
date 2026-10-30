@@ -1,0 +1,117 @@
+@import "tailwindcss";
+
+@theme {
+  /* Fundo "noite de Champions" */
+  --color-night-950: #040716;
+  --color-night-900: #080d26;
+  --color-night-850: #0b1233;
+  --color-night-800: #10194a;
+  --color-night-700: #1b2766;
+
+  --color-brand-950: #070b24;
+  --color-brand-900: #0d1440;
+  --color-brand-700: #2a3fd1;
+  --color-brand-500: #4f6bff;
+  --color-brand-300: #9aaeff;
+  --color-accent: #00e0c6;
+  --color-gold: #f5c451;
+}
+
+@theme inline {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-display-face), var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-night-950 text-slate-100 antialiased;
+    background-image:
+      radial-gradient(70rem 36rem at 12% -12%, rgb(79 107 255 / 0.3), transparent 60%),
+      radial-gradient(55rem 34rem at 100% 8%, rgb(0 224 198 / 0.18), transparent 60%),
+      radial-gradient(60rem 30rem at 50% 115%, rgb(124 58 237 / 0.18), transparent 60%),
+      radial-gradient(1px 1px at 20% 30%, rgb(255 255 255 / 0.35), transparent),
+      radial-gradient(1px 1px at 70% 15%, rgb(255 255 255 / 0.25), transparent),
+      radial-gradient(1px 1px at 85% 60%, rgb(255 255 255 / 0.2), transparent),
+      radial-gradient(1px 1px at 40% 80%, rgb(255 255 255 / 0.18), transparent);
+    background-attachment: fixed;
+  }
+  h1,
+  h2,
+  h3 {
+    @apply font-display tracking-tight;
+  }
+  ::selection {
+    @apply bg-accent/30 text-white;
+  }
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-accent;
+  }
+}
+
+@layer components {
+  /* Vidro fosco (estilo "bento" do template de asset tracker): tiles translúcidos sobre o fundo em gradiente. */
+  .card {
+    @apply relative rounded-3xl bg-linear-to-b from-white/[0.07] to-white/[0.025] p-4 shadow-2xl shadow-black/30 ring-1 ring-white/[0.1] backdrop-blur-xl sm:p-5;
+  }
+  .tile-label {
+    @apply flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400;
+  }
+  .tile-value {
+    @apply font-display text-4xl font-extrabold leading-none tracking-tight;
+  }
+  .card-link {
+    @apply transition hover:-translate-y-0.5 hover:bg-night-850/90 hover:ring-brand-500/50;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-xl bg-linear-to-r from-brand-500 to-violet-500 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-brand-500/25 transition hover:brightness-110 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none disabled:hover:brightness-100;
+  }
+  .btn-accent {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-xl bg-accent px-4 py-2 text-sm font-bold text-night-950 shadow-lg shadow-accent/20 transition hover:brightness-110 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-xl px-4 py-2 text-sm font-semibold text-slate-200 ring-1 ring-white/15 transition hover:bg-white/5 hover:ring-white/30 disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  .input {
+    @apply w-full rounded-xl border border-white/10 bg-night-950/70 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 transition focus:border-accent/60 focus:ring-2 focus:ring-accent/20 focus:outline-none disabled:opacity-50;
+  }
+  .label {
+    @apply mb-1 block text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400;
+  }
+  .eyebrow {
+    @apply text-[11px] font-bold uppercase tracking-[0.2em] text-accent;
+  }
+  .table {
+    @apply w-full text-left text-sm;
+  }
+  .table th {
+    @apply border-b border-white/10 bg-white/[0.02] px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400;
+  }
+  .table th:first-child,
+  .table td:first-child {
+    @apply pl-4;
+  }
+  .table th:last-child,
+  .table td:last-child {
+    @apply pr-4;
+  }
+  .table td {
+    @apply border-b border-white/5 px-3 py-2.5 align-middle;
+  }
+  .table tbody tr {
+    @apply transition-colors hover:bg-white/[0.03];
+  }
+  .num {
+    @apply font-display tabular-nums;
+  }
+}
+
+/* Gramado do "Meu time" */
+.pitch {
+  background:
+    linear-gradient(to bottom, transparent 49.6%, rgb(255 255 255 / 0.18) 49.6%, rgb(255 255 255 / 0.18) 50.4%, transparent 50.4%),
+    radial-gradient(circle at 50% 50%, transparent 3.9rem, rgb(255 255 255 / 0.18) 3.9rem, rgb(255 255 255 / 0.18) calc(3.9rem + 1.5px), transparent calc(3.9rem + 1.5px)),
+    repeating-linear-gradient(to bottom, #0e6b3d 0 2.75rem, #0c5f36 2.75rem 5.5rem);
+}

@@ -1,0 +1,1 @@
+ALTER TABLE "player_match_stats" RENAME COLUMN "interceptions" TO "balls_recovered";
